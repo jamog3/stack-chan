@@ -49,12 +49,18 @@ const TOUCH_PANEL_PET_MOTION_STEP_MS = 220
 const TOUCH_PANEL_PET_MOTION_STEP_SEC = TOUCH_PANEL_PET_MOTION_STEP_MS / 1000
 const MOTION_DETECT_COLD_DURATION_MS = 5000
 const SPEECH_SYNTHESIS_TEXT = 'こんにちわ。すたっくちゃんです。'
+const ONE_HOUR_MS = 60 * 60 * 1000
+const TIME_SIGNAL_BALLOON_HIDE_DELAY_MS = 1500
 
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+function msUntilNextHour(now = new Date()): number {
+  return ONE_HOUR_MS - ((now.getMinutes() * 60 + now.getSeconds()) * 1000 + now.getMilliseconds())
 }
 
 export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreated']> = (robot) => {
@@ -405,6 +411,39 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     kind: 'toggle',
     initialState: isFollowing,
     callback: toggleLookAround,
+  })
+
+  /**
+   * Time signal (hourly announcement)
+   */
+  let timeSignalEnabled = true
+  const announceHour = async (target: typeof robot) => {
+    const hour = new Date().getHours()
+    const text = `ただ今の時刻は${hour}時です。`
+    target.showBalloon(text)
+    try {
+      await target.audio.say(text)
+    } catch (error) {
+      trace(`[TimeSignal] say error ${errorMessage(error)}\n`)
+    } finally {
+      Timer.set(() => target.hideBalloon(), TIME_SIGNAL_BALLOON_HIDE_DELAY_MS)
+    }
+  }
+  Timer.set(() => {
+    if (timeSignalEnabled) void announceHour(robot)
+    Timer.repeat(() => {
+      if (timeSignalEnabled) void announceHour(robot)
+    }, ONE_HOUR_MS)
+  }, msUntilNextHour())
+  robot.drawer.addDrawerButton({
+    key: 'toggleTimeSignal',
+    label: '時報',
+    kind: 'toggle',
+    initialState: timeSignalEnabled,
+    callback: () => {
+      timeSignalEnabled = !timeSignalEnabled
+      robot.drawer.setDrawerButtonState('toggleTimeSignal', timeSignalEnabled)
+    },
   })
 
   /**
