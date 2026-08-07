@@ -18,11 +18,19 @@ function patchStackChanPower() {
   axp2101.writeByte(0x30, 0b111111)
   // Force the final LDO enable mask after the voltage selectors are set.
   axp2101.writeByte(0x90, 0xbf)
-  // Set ALDO/BLDO voltage setpoints.
+  // Set ALDO/BLDO voltage setpoints (unrelated to backlight — confirmed by
+  // on-device testing that neither rail affects screen brightness).
   axp2101.writeByte(0x94, 33 - 5)
   axp2101.writeByte(0x95, 33 - 5)
   // Disable one unused LDO path to match the reference board profile.
   axp2101.writeByte(0x27, 0x00)
+
+  // LCD backlight is driven by DLDO1, not ALDO/BLDO. Per the official
+  // StackChan firmware (firmware/main/hal/board/stackchan.cc SetBrightness),
+  // brightness 1-100 maps to register value 20-28: 20 + (brightness * 8 / 100).
+  // DLDO1 enable lives in bit 0x80 of 0x90, already set above via 0xbf.
+  const brightness = 15
+  axp2101.writeByte(0x99, 20 + Math.floor((brightness * 8) / 100))
 
   const charge = axp2101.readByte(0x62)
   // Preserve charge-control upper bits and set the target charge-current field.
