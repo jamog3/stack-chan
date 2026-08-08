@@ -453,61 +453,74 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     onPlayed: (playedVolume) => robot.setMouthOpen(playedVolume === 0 ? 0 : Math.min(playedVolume / 2000, 1.0)),
     onDone: () => robot.setMouthOpen(0),
   })
-  const performKyoroKyoro = async (target: typeof robot) => {
+  // setPose resolves once the servo starts moving, not once it arrives, so each
+  // step waits out the move duration itself (plus a settle pause) before the next.
+  const lookUp = async (target: typeof robot) => {
+    await target.setPose(poseForRotation(UP), TIME_SIGNAL_KYORO_STEP_SEC)
+    await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+  }
+  // Enables torque (unless look-around already has it), runs `motion`, then
+  // releases torque again and restores the look-around pause. Shared by every
+  // one-off servo animation (kyoro-kyoro, sleep pose, wake look-up) so they
+  // don't fight look-around's auto-tracking loop for the servo serial bus.
+  const runServoAnimation = async (target: typeof robot, label: string, motion: () => Promise<void>) => {
     const wasFollowing = isFollowing
-    // Pause the look-around auto-tracking loop; its continuous position polling
-    // otherwise contends with these setPose/setTorque commands on the shared
-    // servo serial bus and causes intermittent command timeouts.
     if (wasFollowing) isFollowing = false
     try {
       if (!wasFollowing) await target.setTorque(true)
+      await motion()
+    } catch (error) {
+      trace(`[${label}] motion error ${errorMessage(error)}\n`)
+    } finally {
+      if (!wasFollowing) {
+        try {
+          await target.setTorque(false)
+        } catch (torqueError) {
+          trace(`[${label}] torque release error ${errorMessage(torqueError)}\n`)
+        }
+      }
+      isFollowing = wasFollowing
+    }
+  }
+  const performKyoroKyoro = (target: typeof robot) =>
+    runServoAnimation(target, 'TimeSignal', async () => {
       const [firstSide, secondSide] = Math.random() < 0.5 ? [LEFT, RIGHT] : [RIGHT, LEFT]
-      // setPose resolves once the servo starts moving, not once it arrives, so each
-      // step waits out the move duration itself (plus a settle pause) before the next.
       await target.setPose(poseForRotation(firstSide), TIME_SIGNAL_KYORO_STEP_SEC)
       await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
       await target.setPose(poseForRotation(secondSide), TIME_SIGNAL_KYORO_STEP_SEC)
       await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
-      await target.setPose(poseForRotation(UP), TIME_SIGNAL_KYORO_STEP_SEC)
-      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
-    } catch (error) {
-      trace(`[TimeSignal] kyoro error ${errorMessage(error)}\n`)
-    } finally {
-      if (!wasFollowing) {
-        try {
-          await target.setTorque(false)
-        } catch (torqueError) {
-          trace(`[TimeSignal] kyoro torque release error ${errorMessage(torqueError)}\n`)
-        }
-      }
-      isFollowing = wasFollowing
-    }
-  }
+      await lookUp(target)
+    })
   const performSleepTransition = async (target: typeof robot) => {
-    const wasFollowing = isFollowing
-    if (wasFollowing) isFollowing = false
+    await runServoAnimation(target, 'TimeSignal', async () => {
+      await target.setPose(poseForRotation(FORWARD), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+    })
+    setEmotionWithEffect(target, Emotion.SLEEPY)
+  }
+  // Shared by both the hourly time signal and the general idle timeout: dim the
+  // display, level the head back to horizontal, reset the face, and release
+  // servo torque so it isn't holding a pose while the screen is off.
+  const enterScreenOff = async (target: typeof robot) => {
+    setBacklightPercent(0)
+    setEmotionWithEffect(target, Emotion.NEUTRAL)
     try {
-      if (!wasFollowing) await target.setTorque(true)
       await target.setPose(poseForRotation(FORWARD), TIME_SIGNAL_KYORO_STEP_SEC)
       await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
     } catch (error) {
-      trace(`[TimeSignal] sleep pose error ${errorMessage(error)}\n`)
+      trace(`[ScreenOff] level pose error ${errorMessage(error)}\n`)
     } finally {
-      if (!wasFollowing) {
-        try {
-          await target.setTorque(false)
-        } catch (torqueError) {
-          trace(`[TimeSignal] sleep torque release error ${errorMessage(torqueError)}\n`)
-        }
+      try {
+        await target.setTorque(false)
+      } catch (error) {
+        trace(`[ScreenOff] torque release error ${errorMessage(error)}\n`)
       }
-      isFollowing = wasFollowing
     }
-    setEmotionWithEffect(target, Emotion.SLEEPY)
   }
   const announceHour = async (target: typeof robot) => {
     const hour = new Date().getHours()
     const text = `${hour}時になりました。`
-    wakeScreen()
+    wakeScreen({ lookUpOnWake: false })
     await wait(TIME_SIGNAL_SCREEN_ON_SETTLE_MS)
     await performKyoroKyoro(target)
     target.showBalloon(text)
@@ -517,10 +530,7 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       trace(`[TimeSignal] say error ${errorMessage(error)}\n`)
     } finally {
       Timer.set(() => target.hideBalloon(), TIME_SIGNAL_BALLOON_HIDE_DELAY_MS)
-      Timer.set(() => {
-        setBacklightPercent(0)
-        setEmotionWithEffect(target, Emotion.NEUTRAL)
-      }, TIME_SIGNAL_SCREEN_OFF_DELAY_MS)
+      Timer.set(() => void enterScreenOff(target), TIME_SIGNAL_SCREEN_OFF_DELAY_MS)
       Timer.set(() => void performSleepTransition(target), TIME_SIGNAL_SLEEP_DELAY_MS)
     }
   }
@@ -767,18 +777,25 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     clearIdleTimers()
     idleSleepyTimer = Timer.set(() => {
       idleSleepyTimer = undefined
-      setEmotionWithEffect(robot, Emotion.SLEEPY)
+      // Reuses the time signal's level-then-sleepy transition so both paths
+      // settle to a horizontal pose before showing the sleepy face.
+      void performSleepTransition(robot)
       idleScreenOffTimer = Timer.set(() => {
         idleScreenOffTimer = undefined
-        setBacklightPercent(0)
-        setEmotionWithEffect(robot, Emotion.NEUTRAL)
+        void enterScreenOff(robot)
       }, IDLE_SCREEN_OFF_DELAY_MS)
     }, IDLE_SLEEPY_DELAY_MS)
   }
-  const wakeScreen = () => {
+  // The time signal skips lookUpOnWake because performKyoroKyoro already ends
+  // by looking up 30 degrees (after its own left/right glance); other wake
+  // sources (buttons, touch) have no motion of their own, so they get it here.
+  const wakeScreen = (options: { lookUpOnWake?: boolean } = {}) => {
     setBacklightPercent(DEFAULT_BRIGHTNESS_PERCENT)
     setEmotionWithEffect(robot, Emotion.NEUTRAL)
     scheduleIdleTimers()
+    if (options.lookUpOnWake !== false) {
+      void runServoAnimation(robot, 'Idle', () => lookUp(robot))
+    }
   }
   // Screen taps reach the face via Piu's bubbled 'onFaceTouch' event dispatched
   // to AppController, not through robot.touch (which no view code wires up), so
