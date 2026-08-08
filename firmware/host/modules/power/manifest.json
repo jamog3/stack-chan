@@ -6,7 +6,8 @@
   ],
   "modules": {
     "battery-level": "./battery-level",
-    "set-backlight": "./set-backlight"
+    "set-backlight": "./set-backlight",
+    "vbus-presence": "./vbus-presence"
   },
   "platforms": {
     "esp32/m5stack": {
