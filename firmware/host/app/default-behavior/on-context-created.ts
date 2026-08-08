@@ -13,6 +13,7 @@ import type { MotionType } from 'imu'
 import { localize } from 'localization'
 import config from 'mc/config'
 import type { Content as PiuContent } from 'piu/MC'
+import { tryGetSharedScd40 } from 'scd40'
 import { setBacklightPercent } from 'set-backlight'
 import { randomBetween, wait, waitForCompletion } from 'stackchan-util'
 import Timer from 'timer'
@@ -58,6 +59,7 @@ const TOUCH_PANEL_PET_MOTION_STEP_SEC = TOUCH_PANEL_PET_MOTION_STEP_MS / 1000
 const MOTION_DETECT_COLD_DURATION_MS = 5000
 const SPEECH_SYNTHESIS_TEXT = 'こんにちわ。すたっくちゃんです。'
 const ONE_HOUR_MS = 60 * 60 * 1000
+const CO2_POLL_INTERVAL_MS = 30 * 1000
 const TIME_SIGNAL_BALLOON_HIDE_DELAY_MS = 1500
 const TIME_SIGNAL_KYORO_STEP_SEC = 0.6
 const TIME_SIGNAL_KYORO_STEP_PAUSE_MS = 300
@@ -547,6 +549,15 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       if (timeSignalEnabled) void announceHour(robot)
     }, ONE_HOUR_MS)
   }, msUntilNextHour())
+  // SCD40 (M5Stack CO2 Unit) is optional external hardware; tryGetSharedScd40
+  // silently returns undefined when it isn't attached, so polling is a no-op
+  // on boards without it.
+  Timer.repeat(() => {
+    const sensor = tryGetSharedScd40()
+    if (!sensor?.isDataReady()) return
+    const { co2, temperatureC, humidityPercent } = sensor.readMeasurement()
+    trace(`[SCD40] co2=${co2}ppm temperature=${temperatureC.toFixed(1)}C humidity=${humidityPercent.toFixed(1)}%\n`)
+  }, CO2_POLL_INTERVAL_MS)
   robot.drawer.addDrawerButton({
     key: 'toggleTimeSignal',
     label: '時報',
