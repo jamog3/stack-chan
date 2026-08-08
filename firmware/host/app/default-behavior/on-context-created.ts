@@ -55,6 +55,13 @@ const MOTION_DETECT_COLD_DURATION_MS = 5000
 const SPEECH_SYNTHESIS_TEXT = 'こんにちわ。すたっくちゃんです。'
 const ONE_HOUR_MS = 60 * 60 * 1000
 const TIME_SIGNAL_BALLOON_HIDE_DELAY_MS = 1500
+const TIME_SIGNAL_KYORO_STEP_SEC = 0.6
+const TIME_SIGNAL_KYORO_STEP_PAUSE_MS = 300
+// setPose resolves once the command reaches the servo, not once it arrives, so this
+// pads the wait beyond the commanded move duration to avoid cutting the motion short.
+const TIME_SIGNAL_KYORO_SAFETY_MARGIN_MS = 400
+const TIME_SIGNAL_KYORO_STEP_WAIT_MS =
+  TIME_SIGNAL_KYORO_STEP_SEC * 1000 + TIME_SIGNAL_KYORO_STEP_PAUSE_MS + TIME_SIGNAL_KYORO_SAFETY_MARGIN_MS
 
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
@@ -431,9 +438,35 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
   // (set via the drawer/setup volume control), so this stays in sync with it.
   const timeSignalVolume = canonicalizeVolume(loadPreferences(DOMAIN.tts).volume)
   const timeSignalTTS = new LocalTTS({ sampleRate: 24000, volume: timeSignalVolume })
+  const performKyoroKyoro = async (target: typeof robot) => {
+    const torqueWasEnabled = isFollowing
+    try {
+      if (!torqueWasEnabled) await target.setTorque(true)
+      const [firstSide, secondSide] = Math.random() < 0.5 ? [LEFT, RIGHT] : [RIGHT, LEFT]
+      // setPose resolves once the servo starts moving, not once it arrives, so each
+      // step waits out the move duration itself (plus a settle pause) before the next.
+      await target.setPose(poseForRotation(firstSide), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+      await target.setPose(poseForRotation(secondSide), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+      await target.setPose(poseForRotation(UP), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+    } catch (error) {
+      trace(`[TimeSignal] kyoro error ${errorMessage(error)}\n`)
+    } finally {
+      if (!torqueWasEnabled) {
+        try {
+          await target.setTorque(false)
+        } catch (torqueError) {
+          trace(`[TimeSignal] kyoro torque release error ${errorMessage(torqueError)}\n`)
+        }
+      }
+    }
+  }
   const announceHour = async (target: typeof robot) => {
     const hour = new Date().getHours()
     const text = `${hour}時になりました。`
+    await performKyoroKyoro(target)
     target.showBalloon(text)
     try {
       await waitForCompletion((callback) => timeSignalTTS.stream(`hour${hour}`, undefined, callback))
