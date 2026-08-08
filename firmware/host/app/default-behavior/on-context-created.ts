@@ -1,7 +1,10 @@
+import loadPreferences from 'loadPreference'
 import type { StackchanAppBehavior } from 'app-behavior'
 import { DogFace, ImageFace, SimpleFace } from 'behaviors/face'
+import { DEFAULT_BRIGHTNESS_PERCENT } from 'brightness-model'
 import type { CameraImageType } from 'camera'
 import { type CameraPreviewFrame, createCameraPreviewDialog, prepareCameraPreviewFrame } from 'camera-preview'
+import { DOMAIN } from 'consts'
 import { Emoticon, type EmoticonKey } from 'effects/emoticon'
 import { Emotion } from 'face-state'
 import { type HandAnimationName, isHandAnimationName } from 'hands'
@@ -9,8 +12,11 @@ import type { MotionType } from 'imu'
 import { localize } from 'localization'
 import config from 'mc/config'
 import type { Content as PiuContent } from 'piu/MC'
-import { randomBetween, wait } from 'stackchan-util'
+import { setBacklightPercent } from 'set-backlight'
+import { randomBetween, wait, waitForCompletion } from 'stackchan-util'
 import Timer from 'timer'
+import { TTS as LocalTTS } from 'tts-local'
+import { canonicalizeVolume } from 'volume-model'
 
 const FORWARD = {
   y: 0,
@@ -49,12 +55,28 @@ const TOUCH_PANEL_PET_MOTION_STEP_MS = 220
 const TOUCH_PANEL_PET_MOTION_STEP_SEC = TOUCH_PANEL_PET_MOTION_STEP_MS / 1000
 const MOTION_DETECT_COLD_DURATION_MS = 5000
 const SPEECH_SYNTHESIS_TEXT = 'こんにちわ。すたっくちゃんです。'
+const ONE_HOUR_MS = 60 * 60 * 1000
+const TIME_SIGNAL_BALLOON_HIDE_DELAY_MS = 1500
+const TIME_SIGNAL_KYORO_STEP_SEC = 0.6
+const TIME_SIGNAL_KYORO_STEP_PAUSE_MS = 300
+// setPose resolves once the command reaches the servo, not once it arrives, so this
+// pads the wait beyond the commanded move duration to avoid cutting the motion short.
+const TIME_SIGNAL_KYORO_SAFETY_MARGIN_MS = 400
+const TIME_SIGNAL_KYORO_STEP_WAIT_MS =
+  TIME_SIGNAL_KYORO_STEP_SEC * 1000 + TIME_SIGNAL_KYORO_STEP_PAUSE_MS + TIME_SIGNAL_KYORO_SAFETY_MARGIN_MS
+const TIME_SIGNAL_SCREEN_OFF_DELAY_MS = 10000
+const TIME_SIGNAL_SCREEN_ON_SETTLE_MS = 500
+const TIME_SIGNAL_SLEEP_DELAY_MS = 5000
 
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
     return String((error as { message: unknown }).message)
   }
   return String(error)
+}
+
+function msUntilNextHour(now = new Date()): number {
+  return ONE_HOUR_MS - ((now.getMinutes() * 60 + now.getSeconds()) * 1000 + now.getMilliseconds())
 }
 
 export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreated']> = (robot) => {
@@ -405,6 +427,115 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     kind: 'toggle',
     initialState: isFollowing,
     callback: toggleLookAround,
+  })
+
+  /**
+   * Time signal (hourly announcement)
+   */
+  let timeSignalEnabled = true
+  // Pre-generated (VOICEVOX Zundamon) audio bundled as resources; independent of
+  // config.tts, so the hourly announcement always uses this voice regardless of
+  // which TTS backend robot.audio.say() is configured to use elsewhere.
+  // Match the platform's fixed AudioOut sample rate (host/modules/audio/manifest.json
+  // esp32/m5stackchan_cores3 defines.audioOut.sampleRate); the resource compiler
+  // resamples bundled wav files to this rate, so playback must request the same rate.
+  // Volume follows the same global preference the rest of the app's TTS uses
+  // (set via the drawer/setup volume control), so this stays in sync with it.
+  const timeSignalVolume = canonicalizeVolume(loadPreferences(DOMAIN.tts).volume)
+  // Mirrors runtime-audio.ts's onPlayed/onDone wiring so the mouth animates in sync,
+  // since this TTS instance bypasses robot.audio and isn't wired up automatically.
+  const timeSignalTTS = new LocalTTS({
+    sampleRate: 24000,
+    volume: timeSignalVolume,
+    onPlayed: (playedVolume) => robot.setMouthOpen(playedVolume === 0 ? 0 : Math.min(playedVolume / 2000, 1.0)),
+    onDone: () => robot.setMouthOpen(0),
+  })
+  const performKyoroKyoro = async (target: typeof robot) => {
+    const wasFollowing = isFollowing
+    // Pause the look-around auto-tracking loop; its continuous position polling
+    // otherwise contends with these setPose/setTorque commands on the shared
+    // servo serial bus and causes intermittent command timeouts.
+    if (wasFollowing) isFollowing = false
+    try {
+      if (!wasFollowing) await target.setTorque(true)
+      const [firstSide, secondSide] = Math.random() < 0.5 ? [LEFT, RIGHT] : [RIGHT, LEFT]
+      // setPose resolves once the servo starts moving, not once it arrives, so each
+      // step waits out the move duration itself (plus a settle pause) before the next.
+      await target.setPose(poseForRotation(firstSide), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+      await target.setPose(poseForRotation(secondSide), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+      await target.setPose(poseForRotation(UP), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+    } catch (error) {
+      trace(`[TimeSignal] kyoro error ${errorMessage(error)}\n`)
+    } finally {
+      if (!wasFollowing) {
+        try {
+          await target.setTorque(false)
+        } catch (torqueError) {
+          trace(`[TimeSignal] kyoro torque release error ${errorMessage(torqueError)}\n`)
+        }
+      }
+      isFollowing = wasFollowing
+    }
+  }
+  const performSleepTransition = async (target: typeof robot) => {
+    const wasFollowing = isFollowing
+    if (wasFollowing) isFollowing = false
+    try {
+      if (!wasFollowing) await target.setTorque(true)
+      await target.setPose(poseForRotation(FORWARD), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+    } catch (error) {
+      trace(`[TimeSignal] sleep pose error ${errorMessage(error)}\n`)
+    } finally {
+      if (!wasFollowing) {
+        try {
+          await target.setTorque(false)
+        } catch (torqueError) {
+          trace(`[TimeSignal] sleep torque release error ${errorMessage(torqueError)}\n`)
+        }
+      }
+      isFollowing = wasFollowing
+    }
+    setEmotionWithEffect(target, Emotion.SLEEPY)
+  }
+  const announceHour = async (target: typeof robot) => {
+    const hour = new Date().getHours()
+    const text = `${hour}時になりました。`
+    setBacklightPercent(DEFAULT_BRIGHTNESS_PERCENT)
+    await wait(TIME_SIGNAL_SCREEN_ON_SETTLE_MS)
+    await performKyoroKyoro(target)
+    target.showBalloon(text)
+    try {
+      await waitForCompletion((callback) => timeSignalTTS.stream(`hour${hour}`, undefined, callback))
+    } catch (error) {
+      trace(`[TimeSignal] say error ${errorMessage(error)}\n`)
+    } finally {
+      Timer.set(() => target.hideBalloon(), TIME_SIGNAL_BALLOON_HIDE_DELAY_MS)
+      Timer.set(() => {
+        setBacklightPercent(0)
+        setEmotionWithEffect(target, Emotion.NEUTRAL)
+      }, TIME_SIGNAL_SCREEN_OFF_DELAY_MS)
+      Timer.set(() => void performSleepTransition(target), TIME_SIGNAL_SLEEP_DELAY_MS)
+    }
+  }
+  Timer.set(() => {
+    if (timeSignalEnabled) void announceHour(robot)
+    Timer.repeat(() => {
+      if (timeSignalEnabled) void announceHour(robot)
+    }, ONE_HOUR_MS)
+  }, msUntilNextHour())
+  robot.drawer.addDrawerButton({
+    key: 'toggleTimeSignal',
+    label: '時報',
+    kind: 'toggle',
+    initialState: timeSignalEnabled,
+    callback: () => {
+      timeSignalEnabled = !timeSignalEnabled
+      robot.drawer.setDrawerButtonState('toggleTimeSignal', timeSignalEnabled)
+    },
   })
 
   /**
