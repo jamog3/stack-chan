@@ -1,7 +1,9 @@
+import loadPreferences from 'loadPreference'
 import type { StackchanAppBehavior } from 'app-behavior'
 import { DogFace, ImageFace, SimpleFace } from 'behaviors/face'
 import type { CameraImageType } from 'camera'
 import { type CameraPreviewFrame, createCameraPreviewDialog, prepareCameraPreviewFrame } from 'camera-preview'
+import { DOMAIN } from 'consts'
 import { Emoticon, type EmoticonKey } from 'effects/emoticon'
 import { Emotion } from 'face-state'
 import { type HandAnimationName, isHandAnimationName } from 'hands'
@@ -9,8 +11,10 @@ import type { MotionType } from 'imu'
 import { localize } from 'localization'
 import config from 'mc/config'
 import type { Content as PiuContent } from 'piu/MC'
-import { randomBetween, wait } from 'stackchan-util'
+import { randomBetween, wait, waitForCompletion } from 'stackchan-util'
 import Timer from 'timer'
+import { TTS as LocalTTS } from 'tts-local'
+import { canonicalizeVolume } from 'volume-model'
 
 const FORWARD = {
   y: 0,
@@ -417,12 +421,22 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
    * Time signal (hourly announcement)
    */
   let timeSignalEnabled = true
+  // Pre-generated (VOICEVOX Zundamon) audio bundled as resources; independent of
+  // config.tts, so the hourly announcement always uses this voice regardless of
+  // which TTS backend robot.audio.say() is configured to use elsewhere.
+  // Match the platform's fixed AudioOut sample rate (host/modules/audio/manifest.json
+  // esp32/m5stackchan_cores3 defines.audioOut.sampleRate); the resource compiler
+  // resamples bundled wav files to this rate, so playback must request the same rate.
+  // Volume follows the same global preference the rest of the app's TTS uses
+  // (set via the drawer/setup volume control), so this stays in sync with it.
+  const timeSignalVolume = canonicalizeVolume(loadPreferences(DOMAIN.tts).volume)
+  const timeSignalTTS = new LocalTTS({ sampleRate: 24000, volume: timeSignalVolume })
   const announceHour = async (target: typeof robot) => {
     const hour = new Date().getHours()
-    const text = `ただ今の時刻は${hour}時です。`
+    const text = `${hour}時になりました。`
     target.showBalloon(text)
     try {
-      await target.audio.say(text)
+      await waitForCompletion((callback) => timeSignalTTS.stream(`hour${hour}`, undefined, callback))
     } catch (error) {
       trace(`[TimeSignal] say error ${errorMessage(error)}\n`)
     } finally {
