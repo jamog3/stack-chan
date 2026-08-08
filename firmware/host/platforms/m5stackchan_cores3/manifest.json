@@ -12,7 +12,8 @@
     "setup/m5stackchan-power": "./setup-target",
     "pins/audioout-original": "$(MODULES)/pins/i2s/audioout",
     "pins/audioout": "../core_s3_audioout",
-    "set-backlight": "../../modules/power/platforms/axp2101-set-backlight"
+    "set-backlight": "../../modules/power/platforms/axp2101-set-backlight",
+    "vbus-presence": "../../modules/power/platforms/axp2101-vbus-presence"
   },
   "config": {
     "driver": {

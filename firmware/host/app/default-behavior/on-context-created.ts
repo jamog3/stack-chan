@@ -17,6 +17,7 @@ import { setBacklightPercent } from 'set-backlight'
 import { randomBetween, wait, waitForCompletion } from 'stackchan-util'
 import Timer from 'timer'
 import { TTS as LocalTTS } from 'tts-local'
+import { isVbusPresent } from 'vbus-presence'
 import { canonicalizeVolume } from 'volume-model'
 
 const FORWARD = {
@@ -518,6 +519,12 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     }
   }
   const announceHour = async (target: typeof robot) => {
+    // Only speak while USB power is connected; isVbusPresent() returns
+    // undefined on platforms without VBUS reporting, where this never skips.
+    if (isVbusPresent() === false) {
+      trace('[TimeSignal] USB not connected; skipping announcement\n')
+      return
+    }
     const hour = new Date().getHours()
     const text = `${hour}時になりました。`
     wakeScreen({ lookUpOnWake: false })
