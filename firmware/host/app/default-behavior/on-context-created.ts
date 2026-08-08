@@ -437,7 +437,14 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
   // Volume follows the same global preference the rest of the app's TTS uses
   // (set via the drawer/setup volume control), so this stays in sync with it.
   const timeSignalVolume = canonicalizeVolume(loadPreferences(DOMAIN.tts).volume)
-  const timeSignalTTS = new LocalTTS({ sampleRate: 24000, volume: timeSignalVolume })
+  // Mirrors runtime-audio.ts's onPlayed/onDone wiring so the mouth animates in sync,
+  // since this TTS instance bypasses robot.audio and isn't wired up automatically.
+  const timeSignalTTS = new LocalTTS({
+    sampleRate: 24000,
+    volume: timeSignalVolume,
+    onPlayed: (playedVolume) => robot.setMouthOpen(playedVolume === 0 ? 0 : Math.min(playedVolume / 2000, 1.0)),
+    onDone: () => robot.setMouthOpen(0),
+  })
   const performKyoroKyoro = async (target: typeof robot) => {
     const torqueWasEnabled = isFollowing
     try {
