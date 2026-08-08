@@ -8,6 +8,7 @@
     "../../app/manifest_typings.json"
   ],
   "modules": {
+    "brightness-model": "./brightness-model",
     "consts": "./consts",
     "loadPreference": "./loadPreference",
     "timezone-model": "./timezone-model",

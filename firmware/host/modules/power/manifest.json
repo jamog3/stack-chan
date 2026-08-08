@@ -5,7 +5,8 @@
     "../../app/manifest_typings.json"
   ],
   "modules": {
-    "battery-level": "./battery-level"
+    "battery-level": "./battery-level",
+    "set-backlight": "./set-backlight"
   },
   "platforms": {
     "esp32/m5stack": {

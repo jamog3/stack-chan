@@ -1,6 +1,7 @@
 import loadPreferences from 'loadPreference'
 import type { StackchanAppBehavior } from 'app-behavior'
 import { DogFace, ImageFace, SimpleFace } from 'behaviors/face'
+import { DEFAULT_BRIGHTNESS_PERCENT } from 'brightness-model'
 import type { CameraImageType } from 'camera'
 import { type CameraPreviewFrame, createCameraPreviewDialog, prepareCameraPreviewFrame } from 'camera-preview'
 import { DOMAIN } from 'consts'
@@ -11,6 +12,7 @@ import type { MotionType } from 'imu'
 import { localize } from 'localization'
 import config from 'mc/config'
 import type { Content as PiuContent } from 'piu/MC'
+import { setBacklightPercent } from 'set-backlight'
 import { randomBetween, wait, waitForCompletion } from 'stackchan-util'
 import Timer from 'timer'
 import { TTS as LocalTTS } from 'tts-local'
@@ -62,6 +64,9 @@ const TIME_SIGNAL_KYORO_STEP_PAUSE_MS = 300
 const TIME_SIGNAL_KYORO_SAFETY_MARGIN_MS = 400
 const TIME_SIGNAL_KYORO_STEP_WAIT_MS =
   TIME_SIGNAL_KYORO_STEP_SEC * 1000 + TIME_SIGNAL_KYORO_STEP_PAUSE_MS + TIME_SIGNAL_KYORO_SAFETY_MARGIN_MS
+const TIME_SIGNAL_SCREEN_OFF_DELAY_MS = 10000
+const TIME_SIGNAL_SCREEN_ON_SETTLE_MS = 500
+const TIME_SIGNAL_SLEEP_DELAY_MS = 5000
 
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
@@ -446,9 +451,13 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     onDone: () => robot.setMouthOpen(0),
   })
   const performKyoroKyoro = async (target: typeof robot) => {
-    const torqueWasEnabled = isFollowing
+    const wasFollowing = isFollowing
+    // Pause the look-around auto-tracking loop; its continuous position polling
+    // otherwise contends with these setPose/setTorque commands on the shared
+    // servo serial bus and causes intermittent command timeouts.
+    if (wasFollowing) isFollowing = false
     try {
-      if (!torqueWasEnabled) await target.setTorque(true)
+      if (!wasFollowing) await target.setTorque(true)
       const [firstSide, secondSide] = Math.random() < 0.5 ? [LEFT, RIGHT] : [RIGHT, LEFT]
       // setPose resolves once the servo starts moving, not once it arrives, so each
       // step waits out the move duration itself (plus a settle pause) before the next.
@@ -461,18 +470,42 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     } catch (error) {
       trace(`[TimeSignal] kyoro error ${errorMessage(error)}\n`)
     } finally {
-      if (!torqueWasEnabled) {
+      if (!wasFollowing) {
         try {
           await target.setTorque(false)
         } catch (torqueError) {
           trace(`[TimeSignal] kyoro torque release error ${errorMessage(torqueError)}\n`)
         }
       }
+      isFollowing = wasFollowing
     }
+  }
+  const performSleepTransition = async (target: typeof robot) => {
+    const wasFollowing = isFollowing
+    if (wasFollowing) isFollowing = false
+    try {
+      if (!wasFollowing) await target.setTorque(true)
+      await target.setPose(poseForRotation(FORWARD), TIME_SIGNAL_KYORO_STEP_SEC)
+      await wait(TIME_SIGNAL_KYORO_STEP_WAIT_MS)
+    } catch (error) {
+      trace(`[TimeSignal] sleep pose error ${errorMessage(error)}\n`)
+    } finally {
+      if (!wasFollowing) {
+        try {
+          await target.setTorque(false)
+        } catch (torqueError) {
+          trace(`[TimeSignal] sleep torque release error ${errorMessage(torqueError)}\n`)
+        }
+      }
+      isFollowing = wasFollowing
+    }
+    setEmotionWithEffect(target, Emotion.SLEEPY)
   }
   const announceHour = async (target: typeof robot) => {
     const hour = new Date().getHours()
     const text = `${hour}時になりました。`
+    setBacklightPercent(DEFAULT_BRIGHTNESS_PERCENT)
+    await wait(TIME_SIGNAL_SCREEN_ON_SETTLE_MS)
     await performKyoroKyoro(target)
     target.showBalloon(text)
     try {
@@ -481,6 +514,11 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       trace(`[TimeSignal] say error ${errorMessage(error)}\n`)
     } finally {
       Timer.set(() => target.hideBalloon(), TIME_SIGNAL_BALLOON_HIDE_DELAY_MS)
+      Timer.set(() => {
+        setBacklightPercent(0)
+        setEmotionWithEffect(target, Emotion.NEUTRAL)
+      }, TIME_SIGNAL_SCREEN_OFF_DELAY_MS)
+      Timer.set(() => void performSleepTransition(target), TIME_SIGNAL_SLEEP_DELAY_MS)
     }
   }
   Timer.set(() => {
