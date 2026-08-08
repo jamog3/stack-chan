@@ -1,5 +1,6 @@
 import loadPreferences from 'loadPreference'
 import type { StackchanAppBehavior } from 'app-behavior'
+import { AppController } from 'app-controller'
 import { DogFace, ImageFace, SimpleFace } from 'behaviors/face'
 import { DEFAULT_BRIGHTNESS_PERCENT } from 'brightness-model'
 import type { CameraImageType } from 'camera'
@@ -67,6 +68,8 @@ const TIME_SIGNAL_KYORO_STEP_WAIT_MS =
 const TIME_SIGNAL_SCREEN_OFF_DELAY_MS = 10000
 const TIME_SIGNAL_SCREEN_ON_SETTLE_MS = 500
 const TIME_SIGNAL_SLEEP_DELAY_MS = 5000
+const IDLE_SLEEPY_DELAY_MS = 15000
+const IDLE_SCREEN_OFF_DELAY_MS = 5000
 
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
@@ -504,7 +507,7 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
   const announceHour = async (target: typeof robot) => {
     const hour = new Date().getHours()
     const text = `${hour}時になりました。`
-    setBacklightPercent(DEFAULT_BRIGHTNESS_PERCENT)
+    wakeScreen()
     await wait(TIME_SIGNAL_SCREEN_ON_SETTLE_MS)
     await performKyoroKyoro(target)
     target.showBalloon(text)
@@ -742,9 +745,55 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     }
   }
 
+  /**
+   * Idle screen timeout: after IDLE_SLEEPY_DELAY_MS with no interaction, show a
+   * sleepy face; after IDLE_SCREEN_OFF_DELAY_MS more, dim the display off and
+   * reset the face to neutral. Any interaction (buttons, head touch sensor,
+   * screen touch) wakes the screen back up and resets the face to neutral too.
+   */
+  let idleSleepyTimer: ReturnType<typeof Timer.set> | undefined
+  let idleScreenOffTimer: ReturnType<typeof Timer.set> | undefined
+  const clearIdleTimers = () => {
+    if (idleSleepyTimer) {
+      Timer.clear(idleSleepyTimer)
+      idleSleepyTimer = undefined
+    }
+    if (idleScreenOffTimer) {
+      Timer.clear(idleScreenOffTimer)
+      idleScreenOffTimer = undefined
+    }
+  }
+  const scheduleIdleTimers = () => {
+    clearIdleTimers()
+    idleSleepyTimer = Timer.set(() => {
+      idleSleepyTimer = undefined
+      setEmotionWithEffect(robot, Emotion.SLEEPY)
+      idleScreenOffTimer = Timer.set(() => {
+        idleScreenOffTimer = undefined
+        setBacklightPercent(0)
+        setEmotionWithEffect(robot, Emotion.NEUTRAL)
+      }, IDLE_SCREEN_OFF_DELAY_MS)
+    }, IDLE_SLEEPY_DELAY_MS)
+  }
+  const wakeScreen = () => {
+    setBacklightPercent(DEFAULT_BRIGHTNESS_PERCENT)
+    setEmotionWithEffect(robot, Emotion.NEUTRAL)
+    scheduleIdleTimers()
+  }
+  // Screen taps reach the face via Piu's bubbled 'onFaceTouch' event dispatched
+  // to AppController, not through robot.touch (which no view code wires up), so
+  // hook the prototype method rather than an instance callback.
+  const originalOnFaceTouch = AppController.prototype.onFaceTouch
+  AppController.prototype.onFaceTouch = function (this: AppController) {
+    wakeScreen()
+    originalOnFaceTouch.call(this)
+  }
+  scheduleIdleTimers()
+
   if (robot.button != null) {
     if (robot.button.a != null) {
       robot.button.a.onEvent = (event) => {
+        wakeScreen()
         if (!event.pressed) {
           return
         }
@@ -753,6 +802,7 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     }
     if (robot.button.b != null) {
       robot.button.b.onEvent = (event) => {
+        wakeScreen()
         if (!event.pressed) {
           return
         }
@@ -761,6 +811,7 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     }
     if (robot.button.c != null) {
       robot.button.c.onEvent = (event) => {
+        wakeScreen()
         if (!event.pressed) {
           return
         }
@@ -769,10 +820,21 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     }
   }
 
+  if (robot.touch != null) {
+    // Wrap rather than replace: robot.touch drives the screen's own tap
+    // handling, so this must not swallow whatever handler is already wired up.
+    const previousTouchHandler = robot.touch.onEvent
+    robot.touch.onEvent = (event) => {
+      wakeScreen()
+      previousTouchHandler?.(event)
+    }
+  }
+
   if (robot.touchPanel != null) {
     let lastForwardSwipeTicks: number | undefined
     let lastBackwardSwipeTicks: number | undefined
     robot.touchPanel.onEvent = (event) => {
+      wakeScreen()
       const type = event.gesture
       trace(`[TouchPanel] gesture: ${type}\n`)
       if (type !== 'forwardSwipe' && type !== 'backwardSwipe') return
