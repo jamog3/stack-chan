@@ -599,6 +599,17 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       robot.drawer.setDrawerButtonState('toggleTimeSignal', timeSignalEnabled)
     },
   })
+  // Manually triggers the same announcement as the hourly timer, bypassing
+  // timeSignalEnabled and the USB-connected check, for testing on the bench.
+  robot.drawer.addDrawerButton({
+    key: 'testTimeSignal',
+    label: '時報テスト',
+    kind: 'action',
+    callback: (target) => {
+      closeDrawer()
+      void announceHour(target)
+    },
+  })
 
   /**
    * Servo test (Drawer action)

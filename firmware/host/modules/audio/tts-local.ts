@@ -2,7 +2,6 @@
 
 import type AudioOut from 'pins/audioout'
 import ResourceStreamer from 'resourcestreamer'
-import { waitForCompletion } from 'stackchan-util'
 import { runTTSPlayback } from 'tts-playback-lifecycle'
 import type { TTSCompletion, TTSDoneListener, TTSPlaybackListener } from 'tts-types'
 
@@ -49,11 +48,44 @@ export class TTS {
     })
   }
   // Plays a list of resource keys back-to-back (e.g. digit/place-value speech
-  // parts), awaiting each clip's completion before starting the next so
-  // concatenated fragments read as one continuous utterance.
+  // parts) on a single AudioOut/I2S session. Chaining separate stream() calls
+  // would open and close the I2S channel per clip, and re-initializing the
+  // channel on ESP32 produces an audible click at each clip boundary; keeping
+  // one AudioOut alive for the whole sequence avoids that.
   async playSequence(keys: string[], volume?: number): Promise<void> {
-    for (const key of keys) {
-      await waitForCompletion((callback) => this.stream(key, volume, callback))
-    }
+    if (keys.length === 0) return
+    await new Promise<void>((resolve, reject) => {
+      runTTSPlayback(
+        this,
+        (error) => (error ? reject(error) : resolve()),
+        (lifecycle) => {
+          const audio = lifecycle.openAudio({ streams: 1, sampleRate: this.sampleRate }, volume ?? this.volume)
+          let index = 0
+          const playNext = (): void => {
+            if (index >= keys.length) {
+              lifecycle.onDone()
+              return
+            }
+            const key = keys[index]
+            index += 1
+            lifecycle.attach(
+              new ResourceStreamer({
+                path: `${key}.maud`,
+                audio: {
+                  out: audio,
+                  stream: 0,
+                  sampleRate: this.sampleRate,
+                },
+                onPlayed: lifecycle.onPlayed,
+                onReady: lifecycle.onReady,
+                onError: lifecycle.onError,
+                onDone: playNext,
+              }),
+            )
+          }
+          playNext()
+        },
+      )
+    })
   }
 }
