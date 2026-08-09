@@ -2,6 +2,7 @@
 
 import type AudioOut from 'pins/audioout'
 import ResourceStreamer from 'resourcestreamer'
+import { waitForCompletion } from 'stackchan-util'
 import { runTTSPlayback } from 'tts-playback-lifecycle'
 import type { TTSCompletion, TTSDoneListener, TTSPlaybackListener } from 'tts-types'
 
@@ -46,5 +47,13 @@ export class TTS {
         }),
       )
     })
+  }
+  // Plays a list of resource keys back-to-back (e.g. digit/place-value speech
+  // parts), awaiting each clip's completion before starting the next so
+  // concatenated fragments read as one continuous utterance.
+  async playSequence(keys: string[], volume?: number): Promise<void> {
+    for (const key of keys) {
+      await waitForCompletion((callback) => this.stream(key, volume, callback))
+    }
   }
 }

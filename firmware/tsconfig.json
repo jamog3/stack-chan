@@ -156,7 +156,8 @@
         "./host/modules/util/sim/*",
         "./host/modules/preferences/*",
         "./host/modules/power/*",
-        "./host/modules/power/platforms/*"
+        "./host/modules/power/platforms/*",
+        "./host/modules/sensors/*"
       ],
       "commodetto/*": [
         "./node_modules/@moddable/typings/commodetto/*"

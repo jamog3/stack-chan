@@ -88,7 +88,7 @@
     "enablePowerButton": true
   },
   "resources": {
-    "*": ["./strings/*", "../modules/audio/assets/time-signal/*"],
+    "*": ["./strings/*", "../modules/audio/assets/speech-parts/*"],
     "*-mask": [
       "$(MODDABLE)/examples/assets/fonts/OpenSans-Regular-24",
       {
