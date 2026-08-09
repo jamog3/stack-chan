@@ -553,7 +553,7 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
         // need to be read (tens/ones are dropped rather than spoken exactly).
         const roundedCo2 = clamp(Math.round(co2 / 100) * 100, 0, 9900)
         target.showBalloon(
-          `現在の室温は${roundedTemperature}°C、湿度は${roundedHumidity}%、二酸化炭素濃度は${roundedCo2}ppmです。`,
+          `現在の室温は${roundedTemperature}°C、湿度は${roundedHumidity}%、CO2レベルは${roundedCo2}ppmです。`,
         )
         await timeSignalTTS.playSequence([
           'envIntro',

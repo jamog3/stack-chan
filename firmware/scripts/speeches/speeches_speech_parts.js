@@ -51,9 +51,9 @@ export const speeches = {
   // Hourly time signal suffix; combined with the number parts above.
   hourSuffix: 'じになりました。',
   // Environment reading phrase, split around the number parts:
-  // 現在の室温は[温度]度、湿度は[湿度]パーセント、二酸化炭素濃度は[CO2、百の位までに丸め]ピーピーエムです。
+  // 現在の室温は[温度]度、湿度は[湿度]パーセント、CO2レベルは[CO2、百の位までに丸め]ピーピーエムです。
   envIntro: 'げんざいのしつおんは',
   envDegreeToHumidity: 'ど、しつどは',
-  envPercentToCo2: 'パーセント、にさんかたんそのうどは',
+  envPercentToCo2: 'パーセント、シーオーツーレベルは',
   envPpmEnd: 'ピーピーエムです。',
 }
