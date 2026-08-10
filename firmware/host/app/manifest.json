@@ -112,7 +112,7 @@
       {
         "source": "../modules/ui/assets/fonts/k8x12",
         "size": 24,
-        "characters": "Stack-chan[・＿・]0123456789:°C％pm",
+        "characters": "Stack-chan[・＿・]0123456789:°C％pmABCDEFGHIJKLMNOPQRSTUVWXYZ",
         "monochrome": true
       }
     ]
