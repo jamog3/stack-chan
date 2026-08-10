@@ -12,9 +12,11 @@ import { type HandAnimationName, isHandAnimationName } from 'hands'
 import type { MotionType } from 'imu'
 import { localize } from 'localization'
 import config from 'mc/config'
+import { numberToSpeechParts } from 'number-speech'
 import type { Content as PiuContent } from 'piu/MC'
+import { type Scd40Sample, tryGetSharedScd40 } from 'scd40'
 import { setBacklightPercent } from 'set-backlight'
-import { randomBetween, wait, waitForCompletion } from 'stackchan-util'
+import { randomBetween, wait } from 'stackchan-util'
 import Timer from 'timer'
 import { TTS as LocalTTS } from 'tts-local'
 import { isVbusPresent } from 'vbus-presence'
@@ -58,6 +60,7 @@ const TOUCH_PANEL_PET_MOTION_STEP_SEC = TOUCH_PANEL_PET_MOTION_STEP_MS / 1000
 const MOTION_DETECT_COLD_DURATION_MS = 5000
 const SPEECH_SYNTHESIS_TEXT = 'こんにちわ。すたっくちゃんです。'
 const ONE_HOUR_MS = 60 * 60 * 1000
+const CO2_POLL_INTERVAL_MS = 30 * 1000
 const TIME_SIGNAL_BALLOON_HIDE_DELAY_MS = 1500
 const TIME_SIGNAL_KYORO_STEP_SEC = 0.6
 const TIME_SIGNAL_KYORO_STEP_PAUSE_MS = 300
@@ -518,6 +521,10 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       }
     }
   }
+  // Cached from the polling loop below; announceHour reads it instead of
+  // querying the sensor itself so the hourly announcement never blocks on I2C.
+  let lastSensorReading: Scd40Sample | undefined
+  const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
   const announceHour = async (target: typeof robot) => {
     // Only speak while USB power is connected; isVbusPresent() returns
     // undefined on platforms without VBUS reporting, where this never skips.
@@ -528,11 +535,36 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     const hour = new Date().getHours()
     const text = `${hour}時になりました。`
     wakeScreen({ lookUpOnWake: false })
+    // wakeScreen schedules the generic idle-sleepy/screen-off timers, but the
+    // full announcement (time signal + env reading) can run longer than
+    // IDLE_SLEEPY_DELAY_MS; without this, idle timeout fires mid-speech.
+    // The finally block below schedules this announcement's own timers instead.
+    clearIdleTimers()
     await wait(TIME_SIGNAL_SCREEN_ON_SETTLE_MS)
     await performKyoroKyoro(target)
     target.showBalloon(text)
     try {
-      await waitForCompletion((callback) => timeSignalTTS.stream(`hour${hour}`, undefined, callback))
+      await timeSignalTTS.playSequence([...numberToSpeechParts(hour), 'hourSuffix'])
+      if (lastSensorReading) {
+        const { co2, temperatureC, humidityPercent } = lastSensorReading
+        const roundedTemperature = clamp(Math.round(temperatureC), -99, 99)
+        const roundedHumidity = clamp(Math.round(humidityPercent), 0, 100)
+        // Rounded to the nearest 100ppm so only the thousands/hundreds parts
+        // need to be read (tens/ones are dropped rather than spoken exactly).
+        const roundedCo2 = clamp(Math.round(co2 / 100) * 100, 0, 9900)
+        target.showBalloon(
+          `現在の室温は${roundedTemperature}°C、湿度は${roundedHumidity}%、CO2レベルは${roundedCo2}ppmです。`,
+        )
+        await timeSignalTTS.playSequence([
+          'envIntro',
+          ...numberToSpeechParts(roundedTemperature),
+          'envDegreeToHumidity',
+          ...numberToSpeechParts(roundedHumidity),
+          'envPercentToCo2',
+          ...numberToSpeechParts(roundedCo2),
+          'envPpmEnd',
+        ])
+      }
     } catch (error) {
       trace(`[TimeSignal] say error ${errorMessage(error)}\n`)
     } finally {
@@ -547,6 +579,16 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       if (timeSignalEnabled) void announceHour(robot)
     }, ONE_HOUR_MS)
   }, msUntilNextHour())
+  // SCD40 (M5Stack CO2 Unit) is optional external hardware; tryGetSharedScd40
+  // silently returns undefined when it isn't attached, so polling is a no-op
+  // on boards without it.
+  Timer.repeat(() => {
+    const sensor = tryGetSharedScd40()
+    if (!sensor?.isDataReady()) return
+    lastSensorReading = sensor.readMeasurement()
+    const { co2, temperatureC, humidityPercent } = lastSensorReading
+    trace(`[SCD40] co2=${co2}ppm temperature=${temperatureC.toFixed(1)}C humidity=${humidityPercent.toFixed(1)}%\n`)
+  }, CO2_POLL_INTERVAL_MS)
   robot.drawer.addDrawerButton({
     key: 'toggleTimeSignal',
     label: '時報',
@@ -555,6 +597,17 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     callback: () => {
       timeSignalEnabled = !timeSignalEnabled
       robot.drawer.setDrawerButtonState('toggleTimeSignal', timeSignalEnabled)
+    },
+  })
+  // Manually triggers the same announcement as the hourly timer, bypassing
+  // timeSignalEnabled and the USB-connected check, for testing on the bench.
+  robot.drawer.addDrawerButton({
+    key: 'testTimeSignal',
+    label: '時報テスト',
+    kind: 'action',
+    callback: (target) => {
+      closeDrawer()
+      void announceHour(target)
     },
   })
 

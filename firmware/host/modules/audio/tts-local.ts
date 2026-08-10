@@ -47,4 +47,45 @@ export class TTS {
       )
     })
   }
+  // Plays a list of resource keys back-to-back (e.g. digit/place-value speech
+  // parts) on a single AudioOut/I2S session. Chaining separate stream() calls
+  // would open and close the I2S channel per clip, and re-initializing the
+  // channel on ESP32 produces an audible click at each clip boundary; keeping
+  // one AudioOut alive for the whole sequence avoids that.
+  async playSequence(keys: string[], volume?: number): Promise<void> {
+    if (keys.length === 0) return
+    await new Promise<void>((resolve, reject) => {
+      runTTSPlayback(
+        this,
+        (error) => (error ? reject(error) : resolve()),
+        (lifecycle) => {
+          const audio = lifecycle.openAudio({ streams: 1, sampleRate: this.sampleRate }, volume ?? this.volume)
+          let index = 0
+          const playNext = (): void => {
+            if (index >= keys.length) {
+              lifecycle.onDone()
+              return
+            }
+            const key = keys[index]
+            index += 1
+            lifecycle.attach(
+              new ResourceStreamer({
+                path: `${key}.maud`,
+                audio: {
+                  out: audio,
+                  stream: 0,
+                  sampleRate: this.sampleRate,
+                },
+                onPlayed: lifecycle.onPlayed,
+                onReady: lifecycle.onReady,
+                onError: lifecycle.onError,
+                onDone: playNext,
+              }),
+            )
+          }
+          playNext()
+        },
+      )
+    })
+  }
 }

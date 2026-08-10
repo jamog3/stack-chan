@@ -1,7 +1,5 @@
-/// <reference path="./types.d.ts" />
-
-import type { StackchanContext, WebRadioState } from 'capabilities'
 import { MusicNotes } from 'effects/music-notes'
+import type { WebRadioStackchanContext as StackchanContext, WebRadioState } from './types'
 
 const RADIO_VOLUME = 0.2
 const EFFECT_KEY = 'web-radio:music-notes'

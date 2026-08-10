@@ -11,7 +11,7 @@ import type {
   TTS,
   WebRadioCapability,
 } from 'capabilities'
-import { type BatteryLevelReader, ChatStatusBar } from 'chat-status-bar'
+import { type BatteryLevelReader, ChatStatusBar, type EnvironmentReader } from 'chat-status-bar'
 import type { DrawerButtonViewSpec } from 'drawer'
 import { DynamixelDriver } from 'dynamixel-driver'
 import IMU from 'imu'
@@ -27,6 +27,7 @@ import type { Container as PiuContainer } from 'piu/MC'
 import PY32Led from 'py32-led'
 import { RS30XDriver } from 'rs30x-driver'
 import { StackchanRuntimeContext } from 'runtime-context'
+import { tryGetSharedScd40 } from 'scd40'
 import { SCServoDriver } from 'scservo-driver'
 import { PWMServoDriver } from 'sg90-driver'
 import Speaker from 'speaker'
@@ -89,11 +90,27 @@ function loadBatteryLevelReader(): BatteryLevelReader | undefined {
   }
 }
 
+function loadEnvironmentReader(): EnvironmentReader {
+  return () => {
+    try {
+      const sensor = tryGetSharedScd40()
+      if (!sensor?.isDataReady()) return undefined
+      return sensor.readMeasurement()
+    } catch (error) {
+      trace(`[ui] environment sensor read failed: ${String(error)}\n`)
+      return undefined
+    }
+  }
+}
+
 function createStackchanUI(face: PiuContainer, options: UIOptions = {}): RobotUI {
   return createAppControllerApplication(
     {
       face,
-      appBar: new ChatStatusBar({ readBatteryLevel: loadBatteryLevelReader() }),
+      appBar: new ChatStatusBar({
+        readBatteryLevel: loadBatteryLevelReader(),
+        readEnvironment: loadEnvironmentReader(),
+      }),
       drawerButtons: options.drawerButtons,
     },
     { displayListLength: options.displayListLength ?? DEFAULT_UI_DISPLAY_LIST_LENGTH },

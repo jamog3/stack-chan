@@ -21,6 +21,7 @@
     "../modules/util/manifest.json",
     "../modules/preferences/manifest.json",
     "../modules/power/manifest.json",
+    "../modules/sensors/manifest.json",
     "../platforms/esp32/manifest.json",
     "../platforms/lin/manifest.json",
     "./manifest_typings.json"
@@ -87,7 +88,7 @@
     "enablePowerButton": true
   },
   "resources": {
-    "*": ["./strings/*", "../modules/audio/assets/time-signal/*"],
+    "*": ["./strings/*", "../modules/audio/assets/speech-parts/*"],
     "*-mask": [
       "$(MODDABLE)/examples/assets/fonts/OpenSans-Regular-24",
       {
@@ -111,7 +112,7 @@
       {
         "source": "../modules/ui/assets/fonts/k8x12",
         "size": 24,
-        "characters": "Stack-chan[・＿・]0123456789:",
+        "characters": "Stack-chan[・＿・]0123456789:°C％pm",
         "monochrome": true
       }
     ]

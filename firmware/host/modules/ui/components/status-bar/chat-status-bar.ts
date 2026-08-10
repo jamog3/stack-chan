@@ -1,5 +1,5 @@
 import type { Port as PiuPort } from 'piu/MC'
-import { Container, Content, Label, Port, Skin } from 'piu/MC'
+import { Container, Content, Label, Port, Skin, Style } from 'piu/MC'
 import { ActionButton } from 'ui-controls'
 import { UI, uiStyles } from 'ui-theme'
 
@@ -34,12 +34,25 @@ const clockLeft = (UI.screenWidth - clockWidth) / 2
 const minimumValidTimeMs = 1672722071_000
 const clockRefreshIntervalMs = 1000
 const batteryRefreshIntervalMs = 60_000
+const footerHeight = 48
+const footerPadding = 8
+const footerColumnWidth = 140
+const footerRefreshIntervalMs = 5000
 
 export type BatteryLevelReader = () => number | undefined
+
+export type EnvironmentSample = Readonly<{
+  temperatureC: number
+  humidityPercent: number
+  co2: number
+}>
+
+export type EnvironmentReader = () => EnvironmentSample | undefined
 
 export type ChatStatusBarOptions = Readonly<{
   now?: () => Date
   readBatteryLevel?: BatteryLevelReader
+  readEnvironment?: EnvironmentReader
 }>
 
 export type AppBarMode = Readonly<
@@ -65,12 +78,21 @@ type BatteryData = {
   visible: boolean
 }
 
+type EnvironmentData = {
+  reader?: EnvironmentReader
+  visible: boolean
+}
+
 type ClockBehaviorContract = {
   onVisibilityChanged(label: Label, visible: boolean): void
 }
 
 type BatteryBehaviorContract = {
   onVisibilityChanged(port: PiuPort, visible: boolean): void
+}
+
+type EnvironmentBehaviorContract = {
+  onVisibilityChanged(container: Container, visible: boolean): void
 }
 
 export function formatAppBarTime(date: Date): string {
@@ -124,6 +146,29 @@ function getSkins(): ChatStatusSkins {
     }
   }
   return cachedSkins
+}
+
+type FooterStyles = {
+  left: InstanceType<typeof Style>
+  center: InstanceType<typeof Style>
+  right: InstanceType<typeof Style>
+}
+
+// Fixed at 2x the body font size (matching the clock's k8x12-24), independent of
+// locale: the digits/°/％/p/m glyphs footer text needs don't require localization,
+// and no CJK variant of this larger size exists.
+const footerFont = 'k8x12-24'
+
+let cachedFooterStyles: FooterStyles | null = null
+
+function getFooterStyles(): FooterStyles {
+  if (cachedFooterStyles) return cachedFooterStyles
+  cachedFooterStyles = {
+    left: new Style({ font: footerFont, color: UI.colors.text, horizontal: 'left', vertical: 'middle' }),
+    center: new Style({ font: footerFont, color: UI.colors.text, horizontal: 'center', vertical: 'middle' }),
+    right: new Style({ font: footerFont, color: UI.colors.text, horizontal: 'right', vertical: 'middle' }),
+  }
+  return cachedFooterStyles
 }
 
 class IndicatorBehavior extends Behavior {
@@ -264,11 +309,71 @@ class BatteryBehavior extends Behavior implements BatteryBehaviorContract {
   }
 }
 
+class EnvironmentBehavior extends Behavior implements EnvironmentBehaviorContract {
+  #data?: EnvironmentData
+  #displaying = false
+  #left?: Label
+  #center?: Label
+  #right?: Label
+
+  onCreate(container: Container, data: EnvironmentData) {
+    this.#data = data
+    this.#left = container.content('footerLeft') as Label
+    this.#center = container.content('footerCenter') as Label
+    this.#right = container.content('footerRight') as Label
+  }
+
+  onDisplaying(container: Container) {
+    this.#displaying = true
+    this.updateTimer(container)
+  }
+
+  onUndisplaying(container: Container) {
+    this.#displaying = false
+    container.stop()
+  }
+
+  onTimeChanged(_container: Container) {
+    this.sample()
+  }
+
+  onVisibilityChanged(container: Container, visible: boolean) {
+    if (this.#data) this.#data.visible = visible
+    container.visible = visible
+    this.updateTimer(container)
+  }
+
+  updateTimer(container: Container) {
+    if (!this.#displaying || !this.#data?.visible || !this.#data.reader) {
+      container.stop()
+      return
+    }
+    if (container.running) return
+    this.sample()
+    container.interval = footerRefreshIntervalMs
+    container.start()
+  }
+
+  sample() {
+    let value: EnvironmentSample | undefined
+    try {
+      value = this.#data?.reader?.()
+    } catch {
+      value = undefined
+    }
+    if (!value) return
+    if (this.#left) this.#left.string = `${Math.round(value.temperatureC)}°C`
+    if (this.#center) this.#center.string = `${Math.round(value.humidityPercent)}％`
+    if (this.#right) this.#right.string = `${Math.round(value.co2)}ppm`
+  }
+}
+
 class ChatStatusBarBehavior extends Behavior {
   #mode: AppBarMode = { kind: 'face' }
   #state: ChatStatusBarState = ChatStatusBarState.DISCONNECTED
   #connectionPending = false
   #inputLevel = 0
+  #bar?: Container
   #levelTrack?: Container
   #levelFill?: Content
   #statusIcon?: Content
@@ -279,20 +384,24 @@ class ChatStatusBarBehavior extends Behavior {
   #title?: Label
   #clock?: Label
   #battery?: PiuPort
+  #footer?: Container
   #faceBarVisible = false
   #miniAppsAvailable = false
 
   onCreate(container: Container) {
-    this.#statusIcon = container.content('statusIcon') as Content
-    this.#indicator = container.content('statusIndicator') as Content
-    this.#levelTrack = container.content('levelTrack') as Container
+    const bar = container.content('bar') as Container
+    this.#bar = bar
+    this.#statusIcon = bar.content('statusIcon') as Content
+    this.#indicator = bar.content('statusIndicator') as Content
+    this.#levelTrack = bar.content('levelTrack') as Container
     this.#levelFill = this.#levelTrack?.first as Content
-    this.#menuButton = container.content('menuButton') as Container
-    this.#appsButton = container.content('appsButton') as Container
-    this.#backButton = container.content('backButton') as Container
-    this.#title = container.content('title') as Label
-    this.#clock = container.content('clock') as Label
-    this.#battery = container.content('battery') as PiuPort
+    this.#menuButton = bar.content('menuButton') as Container
+    this.#appsButton = bar.content('appsButton') as Container
+    this.#backButton = bar.content('backButton') as Container
+    this.#title = bar.content('title') as Label
+    this.#clock = bar.content('clock') as Label
+    this.#battery = bar.content('battery') as PiuPort
+    this.#footer = container.content('footer') as Container
     this.setFaceBarVisible(container, true)
   }
 
@@ -313,6 +422,7 @@ class ChatStatusBarBehavior extends Behavior {
   onUndisplaying(container: Container) {
     this.#clock?.stop()
     this.#battery?.stop()
+    this.#footer?.stop()
     this.#indicator?.stop()
     container.stop()
   }
@@ -321,7 +431,7 @@ class ChatStatusBarBehavior extends Behavior {
     this.#mode = mode
     const faceMode = mode.kind === 'face'
     const skins = getSkins()
-    container.skin = faceMode ? skins.bar : skins.chrome
+    if (this.#bar) this.#bar.skin = faceMode ? skins.bar : skins.chrome
     if (this.#title) {
       this.#title.string = faceMode ? '' : mode.title
       this.#title.visible = !faceMode
@@ -366,6 +476,8 @@ class ChatStatusBarBehavior extends Behavior {
     if (this.#clock) clockBehavior?.onVisibilityChanged(this.#clock, faceStatusVisible)
     const batteryBehavior = this.#battery?.behavior as BatteryBehaviorContract | undefined
     if (this.#battery) batteryBehavior?.onVisibilityChanged(this.#battery, faceStatusVisible)
+    const environmentBehavior = this.#footer?.behavior as EnvironmentBehaviorContract | undefined
+    if (this.#footer) environmentBehavior?.onVisibilityChanged(this.#footer, faceStatusVisible)
     if (!faceStatusVisible) {
       this.#levelTrack.visible = false
       this.#statusIcon.visible = false
@@ -430,6 +542,7 @@ class ChatStatusBarBehavior extends Behavior {
 export const ChatStatusBar = Container.template((options: ChatStatusBarOptions = {}) => {
   const skins = getSkins()
   const styles = uiStyles()
+  const footerStyles = getFooterStyles()
   const statusIconLeft = options.readBatteryLevel ? batteryStatusIconLeft : defaultIconLeft
   const levelLeft = statusIconLeft + iconSize + 4
   return {
@@ -438,117 +551,172 @@ export const ChatStatusBar = Container.template((options: ChatStatusBarOptions =
     left: 0,
     right: 0,
     top: 0,
-    height: barHeight,
-    skin: skins.bar,
+    bottom: 0,
+    active: false,
     contents: [
-      new ActionButton(
-        {
-          name: 'backButton',
-          icon: 'back',
-          action: 'onMiniAppBack',
-          enabled: true,
-        },
-        { left: 0, top: 0, width: 44, height: 44, visible: false, active: false },
-      ),
-      new Label(null, {
-        name: 'title',
-        left: 48,
-        right: 12,
-        top: 0,
-        bottom: 0,
-        visible: false,
-        string: '',
-        style: styles.title,
-      }),
-      new Port(
-        {
-          reader: options.readBatteryLevel,
-          visible: true,
-        } satisfies BatteryData,
-        {
-          name: 'battery',
-          left: batteryIconLeft,
-          top: batteryIconTop,
-          width: batteryIconWidth,
-          height: batteryIconHeight,
-          active: false,
-          visible: false,
-          Behavior: BatteryBehavior,
-        },
-      ),
-      new Label(
-        {
-          now: options.now ?? (() => new Date()),
-        } satisfies ClockData,
-        {
-          name: 'clock',
-          left: clockLeft,
-          top: 0,
-          width: clockWidth,
-          bottom: 0,
-          active: false,
-          string: '--:--',
-          style: styles.brand,
-          Behavior: ClockBehavior,
-        },
-      ),
-      new Content(null, {
-        name: 'statusIcon',
-        left: statusIconLeft,
-        top: iconTop,
-        width: iconSize,
-        height: iconSize,
-        skin: skins.microphone,
-        state: 0,
-        visible: false,
-      }),
-      new Content(null, {
-        name: 'statusIndicator',
-        left: statusIconLeft,
-        top: iconTop,
-        width: iconSize,
-        height: iconSize,
-        skin: skins.indicator,
-        variant: 0,
-        // Piu Content hit testing follows `active` even while `visible` is false.
-        // The indicator is never interactive and must not cover the Back button.
-        active: false,
-        visible: false,
-        Behavior: IndicatorBehavior,
-      }),
       new Container(null, {
-        name: 'levelTrack',
-        left: levelLeft,
-        top: iconTop,
-        width: levelWidth,
-        height: levelHeight,
-        skin: skins.levelTrack,
+        name: 'bar',
+        left: 0,
+        right: 0,
+        top: 0,
+        height: barHeight,
+        skin: skins.bar,
         contents: [
-          new Content(null, {
-            left: 0,
+          new ActionButton(
+            {
+              name: 'backButton',
+              icon: 'back',
+              action: 'onMiniAppBack',
+              enabled: true,
+            },
+            { left: 0, top: 0, width: 44, height: 44, visible: false, active: false },
+          ),
+          new Label(null, {
+            name: 'title',
+            left: 48,
+            right: 12,
+            top: 0,
             bottom: 0,
-            width: levelWidth,
-            height: 0,
-            skin: skins.levelFill,
+            visible: false,
+            string: '',
+            style: styles.title,
           }),
+          new Port(
+            {
+              reader: options.readBatteryLevel,
+              visible: true,
+            } satisfies BatteryData,
+            {
+              name: 'battery',
+              left: batteryIconLeft,
+              top: batteryIconTop,
+              width: batteryIconWidth,
+              height: batteryIconHeight,
+              active: false,
+              visible: false,
+              Behavior: BatteryBehavior,
+            },
+          ),
+          new Label(
+            {
+              now: options.now ?? (() => new Date()),
+            } satisfies ClockData,
+            {
+              name: 'clock',
+              left: clockLeft,
+              top: 0,
+              width: clockWidth,
+              bottom: 0,
+              active: false,
+              string: '--:--',
+              style: styles.brand,
+              Behavior: ClockBehavior,
+            },
+          ),
+          new Content(null, {
+            name: 'statusIcon',
+            left: statusIconLeft,
+            top: iconTop,
+            width: iconSize,
+            height: iconSize,
+            skin: skins.microphone,
+            state: 0,
+            visible: false,
+          }),
+          new Content(null, {
+            name: 'statusIndicator',
+            left: statusIconLeft,
+            top: iconTop,
+            width: iconSize,
+            height: iconSize,
+            skin: skins.indicator,
+            variant: 0,
+            // Piu Content hit testing follows `active` even while `visible` is false.
+            // The indicator is never interactive and must not cover the Back button.
+            active: false,
+            visible: false,
+            Behavior: IndicatorBehavior,
+          }),
+          new Container(null, {
+            name: 'levelTrack',
+            left: levelLeft,
+            top: iconTop,
+            width: levelWidth,
+            height: levelHeight,
+            skin: skins.levelTrack,
+            contents: [
+              new Content(null, {
+                left: 0,
+                bottom: 0,
+                width: levelWidth,
+                height: 0,
+                skin: skins.levelFill,
+              }),
+            ],
+          }),
+          new ActionButton(
+            {
+              name: 'appsButton',
+              icon: 'apps',
+              action: 'onMiniAppLauncher',
+              enabled: true,
+            },
+            { right: 44, top: 0, width: 44, height: 44, visible: false, active: false },
+          ),
+          new ActionButton(
+            {
+              name: 'menuButton',
+              icon: 'menu',
+              action: 'onDrawerToggle',
+            },
+            { right: 0, top: 0, width: 44, height: 44 },
+          ),
         ],
       }),
-      new ActionButton(
+      new Container(
         {
-          name: 'appsButton',
-          icon: 'apps',
-          action: 'onMiniAppLauncher',
-          enabled: true,
-        },
-        { right: 44, top: 0, width: 44, height: 44, visible: false, active: false },
-      ),
-      new ActionButton(
+          reader: options.readEnvironment,
+          visible: true,
+        } satisfies EnvironmentData,
         {
-          name: 'menuButton',
-          icon: 'menu',
-          action: 'onDrawerToggle',
+          name: 'footer',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: footerHeight,
+          active: false,
+          visible: false,
+          contents: [
+            new Label(null, {
+              name: 'footerLeft',
+              left: footerPadding,
+              width: footerColumnWidth,
+              bottom: 0,
+              height: footerHeight,
+              string: '',
+              style: footerStyles.left,
+            }),
+            new Label(null, {
+              name: 'footerCenter',
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: footerHeight,
+              string: '',
+              style: footerStyles.center,
+            }),
+            new Label(null, {
+              name: 'footerRight',
+              right: footerPadding,
+              width: footerColumnWidth,
+              bottom: 0,
+              height: footerHeight,
+              string: '',
+              style: footerStyles.right,
+            }),
+          ],
+          Behavior: EnvironmentBehavior,
         },
-        { right: 0, top: 0, width: 44, height: 44 },
       ),
     ],
     Behavior: ChatStatusBarBehavior,
