@@ -8,6 +8,7 @@ import { type CameraPreviewFrame, createCameraPreviewDialog, prepareCameraPrevie
 import { DOMAIN } from 'consts'
 import { Emoticon, type EmoticonKey } from 'effects/emoticon'
 import { Emotion } from 'face-state'
+import { fetchUpcomingEvents } from 'google-calendar'
 import { type HandAnimationName, isHandAnimationName } from 'hands'
 import type { MotionType } from 'imu'
 import { localize } from 'localization'
@@ -74,6 +75,9 @@ const TIME_SIGNAL_SCREEN_ON_SETTLE_MS = 500
 const TIME_SIGNAL_SLEEP_DELAY_MS = 5000
 const IDLE_SLEEPY_DELAY_MS = 15000
 const IDLE_SCREEN_OFF_DELAY_MS = 5000
+const CALENDAR_LOOKAHEAD_MS = 24 * ONE_HOUR_MS
+const CALENDAR_REMINDER_LEAD_MS = 30 * 60 * 1000
+const CALENDAR_REMINDER_TEXT = '30分後に予定があります。'
 
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
@@ -610,6 +614,64 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       void announceHour(target)
     },
   })
+
+  /**
+   * Calendar reminders (Google Calendar)
+   *
+   * On startup, fetches the next 24h of events across all configured calendars and
+   * schedules a spoken reminder 30 minutes before each one starts; refreshes on the
+   * same 24h cadence so reminders keep working past the first day.
+   */
+  const calendarPreferences = loadPreferences(DOMAIN.calendar) as {
+    clientId?: string
+    clientSecret?: string
+    refreshToken?: string
+    calendarIds?: string
+  }
+  let calendarReminderTimers: ReturnType<typeof Timer.set>[] = []
+  const clearCalendarReminders = () => {
+    for (const timer of calendarReminderTimers) Timer.clear(timer)
+    calendarReminderTimers = []
+  }
+  const announceCalendarReminder = async (target: typeof robot) => {
+    try {
+      const result = await target.audio.say(CALENDAR_REMINDER_TEXT)
+      if ('reason' in result) trace(`[Calendar] say error ${result.reason}\n`)
+    } catch (error) {
+      trace(`[Calendar] say error ${errorMessage(error)}\n`)
+    }
+  }
+  const scheduleCalendarReminders = async (target: typeof robot) => {
+    const { clientId, clientSecret, refreshToken, calendarIds } = calendarPreferences
+    const ids =
+      calendarIds
+        ?.split(',')
+        .map((id) => id.trim())
+        .filter(Boolean) ?? []
+    clearCalendarReminders()
+    if (!clientId || !clientSecret || !refreshToken || ids.length === 0) {
+      trace('[Calendar] not configured; skipping reminder scheduling\n')
+      return
+    }
+    try {
+      const now = new Date()
+      const events = await fetchUpcomingEvents(
+        { clientId, clientSecret, refreshToken, calendarIds: ids },
+        now,
+        new Date(now.getTime() + CALENDAR_LOOKAHEAD_MS),
+      )
+      for (const event of events) {
+        const delay = event.start.getTime() - CALENDAR_REMINDER_LEAD_MS - Date.now()
+        if (delay <= 0) continue
+        calendarReminderTimers.push(Timer.set(() => void announceCalendarReminder(target), delay))
+      }
+      trace(`[Calendar] scheduled ${calendarReminderTimers.length} reminder(s) from ${events.length} event(s)\n`)
+    } catch (error) {
+      trace(`[Calendar] fetch error ${errorMessage(error)}\n`)
+    }
+  }
+  Timer.repeat(() => void scheduleCalendarReminders(robot), CALENDAR_LOOKAHEAD_MS)
+  void scheduleCalendarReminders(robot)
 
   /**
    * Servo test (Drawer action)

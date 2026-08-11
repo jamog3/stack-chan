@@ -157,7 +157,8 @@
         "./host/modules/preferences/*",
         "./host/modules/power/*",
         "./host/modules/power/platforms/*",
-        "./host/modules/sensors/*"
+        "./host/modules/sensors/*",
+        "./host/modules/calendar/*"
       ],
       "commodetto/*": [
         "./node_modules/@moddable/typings/commodetto/*"

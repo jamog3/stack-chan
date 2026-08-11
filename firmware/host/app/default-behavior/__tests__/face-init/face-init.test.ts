@@ -118,6 +118,9 @@ try {
       tts: {},
       ai: {},
       led: {},
+      mcp: {},
+      time: {},
+      calendar: {},
     },
   })
 } catch (error) {

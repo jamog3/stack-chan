@@ -22,6 +22,7 @@
     "../modules/preferences/manifest.json",
     "../modules/power/manifest.json",
     "../modules/sensors/manifest.json",
+    "../modules/calendar/manifest.json",
     "../platforms/esp32/manifest.json",
     "../platforms/lin/manifest.json",
     "./manifest_typings.json"
