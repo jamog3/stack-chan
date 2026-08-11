@@ -13,7 +13,8 @@
     "pins/audioout-original": "$(MODULES)/pins/i2s/audioout",
     "pins/audioout": "../core_s3_audioout",
     "set-backlight": "../../modules/power/platforms/axp2101-set-backlight",
-    "vbus-presence": "../../modules/power/platforms/axp2101-vbus-presence"
+    "vbus-presence": "../../modules/power/platforms/axp2101-vbus-presence",
+    "power-off": "../../modules/power/platforms/axp2101-power-off"
   },
   "config": {
     "driver": {
