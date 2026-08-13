@@ -549,7 +549,7 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     await performKyoroKyoro(target)
     target.showBalloon(text)
     try {
-      await timeSignalTTS.playSequence([...numberToSpeechParts(hour), 'hourSuffix'])
+      await timeSignalTTS.playSequence([`hour${hour}`, 'hourSuffix'])
       if (lastSensorReading) {
         const { co2, temperatureC, humidityPercent } = lastSensorReading
         const roundedTemperature = clamp(Math.round(temperatureC), -99, 99)

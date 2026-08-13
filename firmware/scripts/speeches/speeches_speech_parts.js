@@ -48,8 +48,36 @@ export const speeches = {
   // and minus sign (used by the temperature reading for sub-zero values).
   numTen: 'てん',
   numMinus: 'まいなす',
-  // Hourly time signal suffix; combined with the number parts above.
-  hourSuffix: 'じになりました。',
+  // Hourly time signal: full "N時" reading for each hour (0-23), recorded
+  // individually because the generic digit parts above mispronounce
+  // irregular hour readings (4時=よじ, 7時=しちじ, 9時=くじ, etc.) rather
+  // than the expected よん時/なな時/きゅう時.
+  hour0: 'れいじ',
+  hour1: 'いちじ',
+  hour2: 'にじ',
+  hour3: 'さんじ',
+  hour4: 'よじ',
+  hour5: 'ごじ',
+  hour6: 'ろくじ',
+  hour7: 'しちじ',
+  hour8: 'はちじ',
+  hour9: 'くじ',
+  hour10: 'じゅうじ',
+  hour11: 'じゅういちじ',
+  hour12: 'じゅうにじ',
+  hour13: 'じゅうさんじ',
+  hour14: 'じゅうよじ',
+  hour15: 'じゅうごじ',
+  hour16: 'じゅうろくじ',
+  hour17: 'じゅうしちじ',
+  hour18: 'じゅうはちじ',
+  hour19: 'じゅうくじ',
+  hour20: 'にじゅうじ',
+  hour21: 'にじゅういちじ',
+  hour22: 'にじゅうにじ',
+  hour23: 'にじゅうさんじ',
+  // Hourly time signal suffix; combined with the hourN parts above.
+  hourSuffix: 'になりました。',
   // Environment reading phrase, split around the number parts:
   // 現在の室温は[温度]度、湿度は[湿度]パーセント、CO2レベルは[CO2、百の位までに丸め]ピーピーエムです。
   envIntro: 'げんざいのしつおんは',
