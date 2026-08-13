@@ -52,10 +52,22 @@ function parseCalendarAccounts(json: string | undefined): CalendarAccount[] {
   return accounts
 }
 
+export type CalendarReminderHooks = {
+  // Called right before a reminder starts speaking, and once it's done. The caller wires
+  // these to the same wake/sleep motions used elsewhere (the top-touch wake motion and the
+  // hourly time signal's sleep transition), so a reminder firing looks the same as those.
+  // onReminderStart is awaited before speech begins, so the look-up motion finishes first.
+  onReminderStart?: () => Promise<void> | void
+  onReminderEnd?: () => void
+}
+
 // On startup, fetches the next 24h of events across all configured Google accounts/calendars
 // and schedules the reminders in REMINDERS for each one; refreshes on the same 24h cadence so
 // reminders keep working past the first day.
-export function startCalendarReminders(target: { setMouthOpen: (value: number) => void }) {
+export function startCalendarReminders(
+  target: { setMouthOpen: (value: number) => void },
+  hooks: CalendarReminderHooks = {},
+) {
   const calendarPreferences = loadPreferences(DOMAIN.calendar) as {
     clientId?: string
     clientSecret?: string
@@ -78,9 +90,12 @@ export function startCalendarReminders(target: { setMouthOpen: (value: number) =
   }
   const announceReminder = async (parts: string[]) => {
     try {
+      await hooks.onReminderStart?.()
       await reminderTTS.playSequence(parts)
     } catch (error) {
       trace(`[Calendar] say error ${errorMessage(error)}\n`)
+    } finally {
+      hooks.onReminderEnd?.()
     }
   }
   const scheduleReminders = async () => {
