@@ -8,7 +8,7 @@ import { type CameraPreviewFrame, createCameraPreviewDialog, prepareCameraPrevie
 import { DOMAIN } from 'consts'
 import { Emoticon, type EmoticonKey } from 'effects/emoticon'
 import { Emotion } from 'face-state'
-import { fetchUpcomingEvents } from 'google-calendar'
+import { type CalendarAccount, fetchUpcomingEvents } from 'google-calendar'
 import { type HandAnimationName, isHandAnimationName } from 'hands'
 import type { MotionType } from 'imu'
 import { localize } from 'localization'
@@ -625,8 +625,34 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
   const calendarPreferences = loadPreferences(DOMAIN.calendar) as {
     clientId?: string
     clientSecret?: string
-    refreshToken?: string
-    calendarIds?: string
+    accounts?: string
+  }
+  // Parses the JSON-encoded CalendarAccount[] preference, discarding malformed entries
+  // rather than failing the whole schedule (one bad account shouldn't block the rest).
+  const parseCalendarAccounts = (json: string | undefined): CalendarAccount[] => {
+    if (!json) return []
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(json)
+    } catch (error) {
+      trace(`[Calendar] accounts preference is not valid JSON: ${errorMessage(error)}\n`)
+      return []
+    }
+    if (!Array.isArray(parsed)) return []
+    const accounts: CalendarAccount[] = []
+    for (const entry of parsed) {
+      if (
+        entry &&
+        typeof entry === 'object' &&
+        typeof (entry as { refreshToken?: unknown }).refreshToken === 'string' &&
+        Array.isArray((entry as { calendarIds?: unknown }).calendarIds)
+      ) {
+        const { refreshToken, calendarIds } = entry as { refreshToken: string; calendarIds: unknown[] }
+        const ids = calendarIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        if (ids.length > 0) accounts.push({ refreshToken, calendarIds: ids })
+      }
+    }
+    return accounts
   }
   let calendarReminderTimers: ReturnType<typeof Timer.set>[] = []
   const clearCalendarReminders = () => {
@@ -642,21 +668,17 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     }
   }
   const scheduleCalendarReminders = async (target: typeof robot) => {
-    const { clientId, clientSecret, refreshToken, calendarIds } = calendarPreferences
-    const ids =
-      calendarIds
-        ?.split(',')
-        .map((id) => id.trim())
-        .filter(Boolean) ?? []
+    const { clientId, clientSecret, accounts: accountsJson } = calendarPreferences
+    const accounts = parseCalendarAccounts(accountsJson)
     clearCalendarReminders()
-    if (!clientId || !clientSecret || !refreshToken || ids.length === 0) {
+    if (!clientId || !clientSecret || accounts.length === 0) {
       trace('[Calendar] not configured; skipping reminder scheduling\n')
       return
     }
     try {
       const now = new Date()
       const events = await fetchUpcomingEvents(
-        { clientId, clientSecret, refreshToken, calendarIds: ids },
+        { clientId, clientSecret, accounts },
         now,
         new Date(now.getTime() + CALENDAR_LOOKAHEAD_MS),
       )

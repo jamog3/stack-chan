@@ -8,7 +8,11 @@
 の「Calendar reminders」セクション。
 
 この機能はOAuth2のリフレッシュトークンで認証する(非公開カレンダーにも対応するため)。
-以下はその認証情報 `clientId` / `clientSecret` / `refreshToken` を取得する手順。
+`clientId` / `clientSecret` は1つのOAuthクライアントを複数のGoogleアカウントで共有できるが、
+`refreshToken` はGoogleアカウントごとに別の値になる。**別々のGoogleアカウントの予定を
+まとめて取得したい場合は、アカウントの数だけ手順3を繰り返してそれぞれの `refreshToken` を
+取得する**(同じアカウント内の複数カレンダー——例: 自分のカレンダー+共有された家族の
+カレンダー——なら、1つの `refreshToken` に対して `calendarIds` を複数指定すればよい)。
 
 ## 1. Google Cloud ConsoleでOAuthクライアントを作成
 
@@ -51,6 +55,16 @@
 5. 「Authorize APIs」をクリックし、手順2で追加したテストユーザーのアカウントでログイン・許可
 6. Step 2の画面で「Exchange authorization code for tokens」をクリック
 7. 表示される `refresh_token` を控える(これは失効しない限り再利用できる)
+8. 複数アカウント分取得したい場合は、手順2でそのアカウントをテストユーザーに追加した上で、
+   ブラウザで対象アカウントにログインし直してから手順3を再度実行する
+
+### リフレッシュトークンの7日失効に注意
+
+OAuth同意画面の公開ステータスが**「テスト中」**のままだと、発行された `refresh_token` は
+**7日で自動失効**する。恒久的に使うなら、[OAuth同意画面](https://console.cloud.google.com/apis/credentials/consent)
+の公開ステータスを**「本番環境」**に切り替えること(Google審査を受けなくても切り替え自体は可能。
+認可のたびに「アプリは確認されていません」という警告が出るが、「詳細設定」から進めば認可できる)。
+Google Workspaceアカウントで「User Type」を「内部」にできる場合は、テスト中でもこの制限を受けない。
 
 ## 4. 疎通確認(curl)
 
@@ -66,14 +80,45 @@ Googleカレンダーの「カレンダーの統合」に表示されるID)を�
 
 ## 5. デバイスへの設定
 
-認証情報はコード/manifestに書かず、デバイスの `Preference` に直接書き込む
-(`DOMAIN.ai` の `token` などと同じ扱い):
+`accounts` はGoogleアカウントごとの `refreshToken` と、そのアカウントで見る `calendarIds`
+(配列)を持つオブジェクトの配列で、JSON文字列として1つのpreference値に格納する
+(`host/modules/calendar/google-calendar.ts` の `CalendarAccount[]`)。
 
-```js
+もっとも安全なのは、ローカルビルド専用の
+[`host/app/manifest_local.json`](../host/app/manifest_local.json) に書く方法(私設APIキー等を
+コミットしない目的で用意されている、このリポジトリ既存の仕組み。詳細は
+[flashing-firmware_ja.md](./flashing-firmware_ja.md) 参照):
+
+```json
+{
+  "include": ["./manifest.json"],
+  "config": {
+    "calendar": {
+      "clientId": "...",
+      "clientSecret": "...",
+      "accounts": "[{\"refreshToken\":\"アカウントAのrefreshToken\",\"calendarIds\":[\"primary\"]},{\"refreshToken\":\"アカウントBのrefreshToken\",\"calendarIds\":[\"primary\",\"xxxxx@group.calendar.google.com\"]}]"
+    }
+  }
+}
+```
+
+このファイルはgit管理下にあるため、コミット前に `git status` で `manifest_local.json` が
+含まれていないか必ず確認すること(誤コミットを防ぎたい場合は
+`git update-index --assume-unchanged host/app/manifest_local.json` でローカルの変更を
+git管理から一時的に外せる)。
+
+デバイス実機で直接書き込みたい場合(BLE経由のWeb設定画面はまだ`calendar.*`に未対応)は、
+一時的なコードから `Preference.set` を1回呼ぶ方法もある:
+
+```ts
+import Preference from 'preference'
 Preference.set('calendar', 'clientId', '...')
 Preference.set('calendar', 'clientSecret', '...')
-Preference.set('calendar', 'refreshToken', '...')
-Preference.set('calendar', 'calendarIds', 'primary,xxxxx@group.calendar.google.com') // カンマ区切りで複数可
+Preference.set(
+  'calendar',
+  'accounts',
+  JSON.stringify([{ refreshToken: '...', calendarIds: ['primary'] }]),
+)
 ```
 
 ## トラブルシューティング早見表

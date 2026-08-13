@@ -33,8 +33,10 @@ export const PREF_KEYS: readonly [keyof typeof DOMAIN, string, StringConstructor
     [DOMAIN.time, 'timezone', String],
     [DOMAIN.calendar, 'clientId', String],
     [DOMAIN.calendar, 'clientSecret', String],
-    [DOMAIN.calendar, 'refreshToken', String],
-    [DOMAIN.calendar, 'calendarIds', String],
+    // JSON-encoded CalendarAccount[] (see host/modules/calendar/google-calendar.ts): one
+    // entry per Google account, each with its own refreshToken and calendarIds. A single
+    // Preference string is used because PREF_KEYS/Preference only support flat values.
+    [DOMAIN.calendar, 'accounts', String],
   ],
   true,
 )

@@ -10,11 +10,19 @@ export type CalendarEvent = {
   start: Date
 }
 
+// A single Google account authorized against the shared OAuth client below, with the
+// set of calendar IDs (in that account) to fetch. Different Google accounts issue
+// unrelated refreshTokens even when authorized through the same clientId/clientSecret,
+// so each account needs its own entry.
+export type CalendarAccount = {
+  refreshToken: string
+  calendarIds: string[]
+}
+
 export type GoogleCalendarConfig = {
   clientId: string
   clientSecret: string
-  refreshToken: string
-  calendarIds: string[]
+  accounts: CalendarAccount[]
 }
 
 async function readJson(response: { status: number; arrayBuffer: () => Promise<ArrayBuffer> }): Promise<unknown> {
@@ -24,11 +32,14 @@ async function readJson(response: { status: number; arrayBuffer: () => Promise<A
   return JSON.parse(String.fromArrayBuffer(await response.arrayBuffer()))
 }
 
-async function getAccessToken(config: GoogleCalendarConfig): Promise<string> {
+async function getAccessToken(
+  config: Pick<GoogleCalendarConfig, 'clientId' | 'clientSecret'>,
+  refreshToken: string,
+): Promise<string> {
   const body = [
     `client_id=${encodeURIComponent(config.clientId)}`,
     `client_secret=${encodeURIComponent(config.clientSecret)}`,
-    `refresh_token=${encodeURIComponent(config.refreshToken)}`,
+    `refresh_token=${encodeURIComponent(refreshToken)}`,
     'grant_type=refresh_token',
   ].join('&')
   const response = await fetch(TOKEN_URL, {
@@ -74,16 +85,21 @@ async function fetchCalendarEvents(
   return events
 }
 
-// Fetches events across all configured calendars in the [timeMin, timeMax) window and
-// returns them merged and sorted by start time.
+// Fetches events across every calendar of every configured account in the
+// [timeMin, timeMax) window and returns them merged and sorted by start time.
 export async function fetchUpcomingEvents(
   config: GoogleCalendarConfig,
   timeMin: Date,
   timeMax: Date,
 ): Promise<CalendarEvent[]> {
-  const accessToken = await getAccessToken(config)
-  const perCalendar = await Promise.all(
-    config.calendarIds.map((calendarId) => fetchCalendarEvents(calendarId, accessToken, timeMin, timeMax)),
+  const perAccount = await Promise.all(
+    config.accounts.map(async (account) => {
+      const accessToken = await getAccessToken(config, account.refreshToken)
+      const perCalendar = await Promise.all(
+        account.calendarIds.map((calendarId) => fetchCalendarEvents(calendarId, accessToken, timeMin, timeMax)),
+      )
+      return perCalendar.flat()
+    }),
   )
-  return perCalendar.flat().sort((a, b) => a.start.getTime() - b.start.getTime())
+  return perAccount.flat().sort((a, b) => a.start.getTime() - b.start.getTime())
 }
