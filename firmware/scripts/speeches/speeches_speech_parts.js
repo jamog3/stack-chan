@@ -56,4 +56,8 @@ export const speeches = {
   envDegreeToHumidity: 'ど、しつどは',
   envPercentToCo2: 'パーセント、シーオーツーレベルは',
   envPpmEnd: 'ピーピーエムです。',
+  // Google Calendar event reminders (calendar-reminders.ts), spoken at two fixed lead
+  // times before an event starts.
+  calendarReminder30Min: 'さんじゅっぷんごによていがあります。',
+  calendarReminder1Min: 'もうすぐよていのじかんです。',
 }

@@ -3,6 +3,7 @@ import type { StackchanAppBehavior } from 'app-behavior'
 import { AppController } from 'app-controller'
 import { DogFace, ImageFace, SimpleFace } from 'behaviors/face'
 import { DEFAULT_BRIGHTNESS_PERCENT } from 'brightness-model'
+import { startCalendarReminders } from 'calendar-reminders'
 import type { CameraImageType } from 'camera'
 import { type CameraPreviewFrame, createCameraPreviewDialog, prepareCameraPreviewFrame } from 'camera-preview'
 import { DOMAIN } from 'consts'
@@ -648,6 +649,29 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
   })
 
   /**
+   * Calendar reminders (Google Calendar). Logic lives in its own module (see
+   * calendar-reminders.ts) rather than as closures inline here: this function is
+   * already enormous, and XS's per-function stack frame is sized for its local/closure
+   * count, so piling more closures directly into it risks a JS stack overflow at
+   * startup on-device (observed while developing this feature).
+   */
+  // wakeScreen/clearIdleTimers/performSleepTransition are referenced via wrapper closures
+  // (not passed directly) since all three are declared further down in this function; the
+  // wrappers defer the identifier lookup until a reminder actually fires, well after the
+  // whole function has finished running, avoiding a temporal-dead-zone error at this call site.
+  startCalendarReminders(robot, {
+    onReminderStart: async () => {
+      await wakeScreen()
+      // wakeScreen also schedules the generic idle-sleepy/screen-off timers, but a reminder
+      // can speak longer than IDLE_SLEEPY_DELAY_MS; without this, idle timeout could show the
+      // sleepy face mid-speech. onReminderEnd below drives the sleep transition explicitly
+      // instead (mirrors announceHour's identical handling for the hourly time signal).
+      clearIdleTimers()
+    },
+    onReminderEnd: () => void performSleepTransition(robot),
+  })
+
+  /**
    * Servo test (Drawer action)
    */
   let isMoving = false
@@ -885,13 +909,18 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
   // The time signal skips lookUpOnWake because performKyoroKyoro already ends
   // by looking up 30 degrees (after its own left/right glance); other wake
   // sources (buttons, touch) have no motion of their own, so they get it here.
-  const wakeScreen = (options: { lookUpOnWake?: boolean } = {}) => {
+  // Returns a promise that resolves once the look-up motion finishes (or immediately if
+  // skipped), so callers that need to wait for it (e.g. calendar reminders, which speak
+  // only after the motion completes) can await it; existing callers that fire-and-forget
+  // simply don't await the return value, unchanged from before.
+  const wakeScreen = (options: { lookUpOnWake?: boolean } = {}): Promise<void> => {
     setBacklightPercent(DEFAULT_BRIGHTNESS_PERCENT)
     setEmotionWithEffect(robot, Emotion.NEUTRAL)
     scheduleIdleTimers()
     if (options.lookUpOnWake !== false) {
-      void runServoAnimation(robot, 'Idle', () => lookUp(robot))
+      return runServoAnimation(robot, 'Idle', () => lookUp(robot))
     }
+    return Promise.resolve()
   }
   // Screen taps reach the face via Piu's bubbled 'onFaceTouch' event dispatched
   // to AppController, not through robot.touch (which no view code wires up), so

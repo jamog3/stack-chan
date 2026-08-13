@@ -34,6 +34,7 @@ const PREFERENCE_DOMAINS: PreferenceDomain[] = [
   DOMAIN.led,
   DOMAIN.mcp,
   DOMAIN.time,
+  DOMAIN.calendar,
 ]
 
 export default function loadPreferences(category: PreferenceDomain): ConfigRecord {
