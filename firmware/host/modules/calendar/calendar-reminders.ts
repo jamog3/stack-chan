@@ -2,12 +2,20 @@ import loadPreferences from 'loadPreference'
 import { DOMAIN } from 'consts'
 import type { CalendarAccount } from 'google-calendar'
 import { fetchUpcomingEvents } from 'google-calendar'
-import type { Maybe } from 'stackchan-util'
 import Timer from 'timer'
+import { TTS as LocalTTS } from 'tts-local'
+import { canonicalizeVolume } from 'volume-model'
 
 const CALENDAR_LOOKAHEAD_MS = 24 * 60 * 60 * 1000
-const CALENDAR_REMINDER_LEAD_MS = 30 * 60 * 1000
-const CALENDAR_REMINDER_TEXT = '30分後に予定があります。'
+
+// Each reminder fires once per event, `leadMs` before its start. `parts` are keys into the
+// bundled speech-parts resources (see scripts/speeches/speeches_speech_parts.js) — the same
+// pre-generated VOICEVOX Zundamon voice the hourly time signal uses, independent of whatever
+// config.tts is set to.
+const REMINDERS: { leadMs: number; parts: string[] }[] = [
+  { leadMs: 30 * 60 * 1000, parts: ['calendarReminder30Min'] },
+  { leadMs: 1 * 60 * 1000, parts: ['calendarReminder1Min'] },
+]
 
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
@@ -45,25 +53,32 @@ function parseCalendarAccounts(json: string | undefined): CalendarAccount[] {
 }
 
 // On startup, fetches the next 24h of events across all configured Google accounts/calendars
-// and schedules a spoken reminder 30 minutes before each one starts; refreshes on the same 24h
-// cadence so reminders keep working past the first day. `target.audio.say` is used for the
-// reminder (not a fixed bundled voice) since it isn't a scheduled system announcement like the
-// hourly time signal.
-export function startCalendarReminders(target: { audio: { say: (text: string) => Promise<Maybe<string>> } }) {
+// and schedules the reminders in REMINDERS for each one; refreshes on the same 24h cadence so
+// reminders keep working past the first day.
+export function startCalendarReminders(target: { setMouthOpen: (value: number) => void }) {
   const calendarPreferences = loadPreferences(DOMAIN.calendar) as {
     clientId?: string
     clientSecret?: string
     accounts?: string
   }
+  // Mirrors the hourly time signal's setup (on-context-created.ts): a dedicated LocalTTS
+  // instance bundled with pre-generated Zundamon audio, independent of config.tts, with the
+  // onPlayed/onDone wiring reproduced here since this TTS instance bypasses robot.audio.
+  const volume = canonicalizeVolume(loadPreferences(DOMAIN.tts).volume)
+  const reminderTTS = new LocalTTS({
+    sampleRate: 24000,
+    volume,
+    onPlayed: (playedVolume) => target.setMouthOpen(playedVolume === 0 ? 0 : Math.min(playedVolume / 2000, 1.0)),
+    onDone: () => target.setMouthOpen(0),
+  })
   let reminderTimers: ReturnType<typeof Timer.set>[] = []
   const clearReminders = () => {
     for (const timer of reminderTimers) Timer.clear(timer)
     reminderTimers = []
   }
-  const announceReminder = async () => {
+  const announceReminder = async (parts: string[]) => {
     try {
-      const result = await target.audio.say(CALENDAR_REMINDER_TEXT)
-      if ('reason' in result && result.reason) trace(`[Calendar] say error ${result.reason}\n`)
+      await reminderTTS.playSequence(parts)
     } catch (error) {
       trace(`[Calendar] say error ${errorMessage(error)}\n`)
     }
@@ -84,9 +99,11 @@ export function startCalendarReminders(target: { audio: { say: (text: string) =>
         new Date(now.getTime() + CALENDAR_LOOKAHEAD_MS),
       )
       for (const event of events) {
-        const delay = event.start.getTime() - CALENDAR_REMINDER_LEAD_MS - Date.now()
-        if (delay <= 0) continue
-        reminderTimers.push(Timer.set(() => void announceReminder(), delay))
+        for (const reminder of REMINDERS) {
+          const delay = event.start.getTime() - reminder.leadMs - Date.now()
+          if (delay <= 0) continue
+          reminderTimers.push(Timer.set(() => void announceReminder(reminder.parts), delay))
+        }
       }
       trace(`[Calendar] scheduled ${reminderTimers.length} reminder(s) from ${events.length} event(s)\n`)
     } catch (error) {
