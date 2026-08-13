@@ -7,7 +7,8 @@
     "$(MODDABLE)/modules/data/headers/manifest.json"
   ],
   "modules": {
-    "google-calendar": "./google-calendar"
+    "google-calendar": "./google-calendar",
+    "calendar-reminders": "./calendar-reminders"
   },
   "data": {
     "*": [

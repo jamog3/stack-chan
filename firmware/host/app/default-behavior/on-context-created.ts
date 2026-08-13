@@ -3,12 +3,12 @@ import type { StackchanAppBehavior } from 'app-behavior'
 import { AppController } from 'app-controller'
 import { DogFace, ImageFace, SimpleFace } from 'behaviors/face'
 import { DEFAULT_BRIGHTNESS_PERCENT } from 'brightness-model'
+import { startCalendarReminders } from 'calendar-reminders'
 import type { CameraImageType } from 'camera'
 import { type CameraPreviewFrame, createCameraPreviewDialog, prepareCameraPreviewFrame } from 'camera-preview'
 import { DOMAIN } from 'consts'
 import { Emoticon, type EmoticonKey } from 'effects/emoticon'
 import { Emotion } from 'face-state'
-import { type CalendarAccount, fetchUpcomingEvents } from 'google-calendar'
 import { type HandAnimationName, isHandAnimationName } from 'hands'
 import type { MotionType } from 'imu'
 import { localize } from 'localization'
@@ -75,9 +75,6 @@ const TIME_SIGNAL_SCREEN_ON_SETTLE_MS = 500
 const TIME_SIGNAL_SLEEP_DELAY_MS = 5000
 const IDLE_SLEEPY_DELAY_MS = 15000
 const IDLE_SCREEN_OFF_DELAY_MS = 5000
-const CALENDAR_LOOKAHEAD_MS = 24 * ONE_HOUR_MS
-const CALENDAR_REMINDER_LEAD_MS = 30 * 60 * 1000
-const CALENDAR_REMINDER_TEXT = '30分後に予定があります。'
 
 function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) {
@@ -616,84 +613,13 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
   })
 
   /**
-   * Calendar reminders (Google Calendar)
-   *
-   * On startup, fetches the next 24h of events across all configured calendars and
-   * schedules a spoken reminder 30 minutes before each one starts; refreshes on the
-   * same 24h cadence so reminders keep working past the first day.
+   * Calendar reminders (Google Calendar). Logic lives in its own module (see
+   * calendar-reminders.ts) rather than as closures inline here: this function is
+   * already enormous, and XS's per-function stack frame is sized for its local/closure
+   * count, so piling more closures directly into it risks a JS stack overflow at
+   * startup on-device (observed while developing this feature).
    */
-  const calendarPreferences = loadPreferences(DOMAIN.calendar) as {
-    clientId?: string
-    clientSecret?: string
-    accounts?: string
-  }
-  // Parses the JSON-encoded CalendarAccount[] preference, discarding malformed entries
-  // rather than failing the whole schedule (one bad account shouldn't block the rest).
-  const parseCalendarAccounts = (json: string | undefined): CalendarAccount[] => {
-    if (!json) return []
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(json)
-    } catch (error) {
-      trace(`[Calendar] accounts preference is not valid JSON: ${errorMessage(error)}\n`)
-      return []
-    }
-    if (!Array.isArray(parsed)) return []
-    const accounts: CalendarAccount[] = []
-    for (const entry of parsed) {
-      if (
-        entry &&
-        typeof entry === 'object' &&
-        typeof (entry as { refreshToken?: unknown }).refreshToken === 'string' &&
-        Array.isArray((entry as { calendarIds?: unknown }).calendarIds)
-      ) {
-        const { refreshToken, calendarIds } = entry as { refreshToken: string; calendarIds: unknown[] }
-        const ids = calendarIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
-        if (ids.length > 0) accounts.push({ refreshToken, calendarIds: ids })
-      }
-    }
-    return accounts
-  }
-  let calendarReminderTimers: ReturnType<typeof Timer.set>[] = []
-  const clearCalendarReminders = () => {
-    for (const timer of calendarReminderTimers) Timer.clear(timer)
-    calendarReminderTimers = []
-  }
-  const announceCalendarReminder = async (target: typeof robot) => {
-    try {
-      const result = await target.audio.say(CALENDAR_REMINDER_TEXT)
-      if ('reason' in result) trace(`[Calendar] say error ${result.reason}\n`)
-    } catch (error) {
-      trace(`[Calendar] say error ${errorMessage(error)}\n`)
-    }
-  }
-  const scheduleCalendarReminders = async (target: typeof robot) => {
-    const { clientId, clientSecret, accounts: accountsJson } = calendarPreferences
-    const accounts = parseCalendarAccounts(accountsJson)
-    clearCalendarReminders()
-    if (!clientId || !clientSecret || accounts.length === 0) {
-      trace('[Calendar] not configured; skipping reminder scheduling\n')
-      return
-    }
-    try {
-      const now = new Date()
-      const events = await fetchUpcomingEvents(
-        { clientId, clientSecret, accounts },
-        now,
-        new Date(now.getTime() + CALENDAR_LOOKAHEAD_MS),
-      )
-      for (const event of events) {
-        const delay = event.start.getTime() - CALENDAR_REMINDER_LEAD_MS - Date.now()
-        if (delay <= 0) continue
-        calendarReminderTimers.push(Timer.set(() => void announceCalendarReminder(target), delay))
-      }
-      trace(`[Calendar] scheduled ${calendarReminderTimers.length} reminder(s) from ${events.length} event(s)\n`)
-    } catch (error) {
-      trace(`[Calendar] fetch error ${errorMessage(error)}\n`)
-    }
-  }
-  Timer.repeat(() => void scheduleCalendarReminders(robot), CALENDAR_LOOKAHEAD_MS)
-  void scheduleCalendarReminders(robot)
+  startCalendarReminders(robot)
 
   /**
    * Servo test (Drawer action)
