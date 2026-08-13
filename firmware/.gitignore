@@ -1,6 +1,7 @@
 node_modules/
 /tmp/
 /scripts/key.json
+/scripts/*.local.sh
 /docs/api
 /dist/
 /dist-architecture/
