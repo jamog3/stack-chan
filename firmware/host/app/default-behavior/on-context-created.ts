@@ -578,12 +578,18 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       Timer.set(() => void performSleepTransition(target), TIME_SIGNAL_SLEEP_DELAY_MS)
     }
   }
-  Timer.set(() => {
-    if (timeSignalEnabled) void announceHour(robot)
-    Timer.repeat(() => {
+  // Re-derives msUntilNextHour() from the live clock before each reschedule
+  // (rather than a fixed ONE_HOUR_MS Timer.repeat) so a clock correction that
+  // lands after this timer was first armed (e.g. SNTP sync completing only
+  // after the user continues past a "no WiFi" boot prompt, offline) doesn't
+  // leave the announcement permanently offset from the real top of the hour.
+  const scheduleNextHourlyAnnouncement = () => {
+    Timer.set(() => {
       if (timeSignalEnabled) void announceHour(robot)
-    }, ONE_HOUR_MS)
-  }, msUntilNextHour())
+      scheduleNextHourlyAnnouncement()
+    }, msUntilNextHour())
+  }
+  scheduleNextHourlyAnnouncement()
   // SCD40 (M5Stack CO2 Unit) is optional external hardware; tryGetSharedScd40
   // silently returns undefined when it isn't attached, so polling is a no-op
   // on boards without it.
