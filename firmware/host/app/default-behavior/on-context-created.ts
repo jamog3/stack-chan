@@ -111,6 +111,11 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
   let pettingHoldTimer: ReturnType<typeof Timer.set> | undefined
   let motionDetectRestoreTimer: ReturnType<typeof Timer.set> | undefined
   let motionDetectPreviousEmotion: Emotion | undefined
+  // Handles for the hourly time signal's delayed sleep-transition/screen-off timers
+  // (scheduled in announceHour's finally block below); declared here so clearIdleTimers,
+  // defined further down, can cancel them from any wake path.
+  let timeSignalSleepTimer: ReturnType<typeof Timer.set> | undefined
+  let timeSignalScreenOffTimer: ReturnType<typeof Timer.set> | undefined
   const emotionKeyMap: Record<Emotion, EmoticonKey | null> = {
     [Emotion.HAPPY]: 'heart',
     [Emotion.ANGRY]: 'angry',
@@ -574,8 +579,14 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
       trace(`[TimeSignal] say error ${errorMessage(error)}\n`)
     } finally {
       Timer.set(() => target.hideBalloon(), TIME_SIGNAL_BALLOON_HIDE_DELAY_MS)
-      Timer.set(() => void enterScreenOff(target), TIME_SIGNAL_SCREEN_OFF_DELAY_MS)
-      Timer.set(() => void performSleepTransition(target), TIME_SIGNAL_SLEEP_DELAY_MS)
+      timeSignalScreenOffTimer = Timer.set(() => {
+        timeSignalScreenOffTimer = undefined
+        void enterScreenOff(target)
+      }, TIME_SIGNAL_SCREEN_OFF_DELAY_MS)
+      timeSignalSleepTimer = Timer.set(() => {
+        timeSignalSleepTimer = undefined
+        void performSleepTransition(target)
+      }, TIME_SIGNAL_SLEEP_DELAY_MS)
     }
   }
   // Re-derives msUntilNextHour() from the live clock before each reschedule
@@ -889,7 +900,21 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
    */
   let idleSleepyTimer: ReturnType<typeof Timer.set> | undefined
   let idleScreenOffTimer: ReturnType<typeof Timer.set> | undefined
+  // clearIdleTimers doubles as the reset point for every "something is awake now" path
+  // (buttons, touch, calendar reminders, the hourly time signal itself), so the time
+  // signal's own delayed sleep-transition/screen-off timers are cleared here too. Without
+  // this, a calendar reminder (or any other wake event) starting within the few seconds
+  // after an hourly announcement finishes would still get interrupted by that stale timer
+  // firing mid-speech, since nothing else references it once scheduled.
   const clearIdleTimers = () => {
+    if (timeSignalSleepTimer) {
+      Timer.clear(timeSignalSleepTimer)
+      timeSignalSleepTimer = undefined
+    }
+    if (timeSignalScreenOffTimer) {
+      Timer.clear(timeSignalScreenOffTimer)
+      timeSignalScreenOffTimer = undefined
+    }
     if (idleSleepyTimer) {
       Timer.clear(idleSleepyTimer)
       idleSleepyTimer = undefined
