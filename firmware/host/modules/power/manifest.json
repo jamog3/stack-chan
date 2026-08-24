@@ -8,7 +8,8 @@
     "battery-level": "./battery-level",
     "set-backlight": "./set-backlight",
     "vbus-presence": "./vbus-presence",
-    "power-off": "./power-off"
+    "power-off": "./power-off",
+    "vbus-shutdown": "./vbus-shutdown"
   },
   "platforms": {
     "esp32/m5stack": {
