@@ -20,13 +20,25 @@ export default class PY32Led {
       (error) => trace(`[py32-led] init failed: ${error}\n`),
     )
     if (!expander) return
-    this.#expander = expander
     const ledPin = parameters.ledPin ?? 13
-    expander.setDirection(ledPin, true)
-    expander.setPullMode(ledPin, true)
-    expander.setDriveMode(ledPin, false)
-    expander.setLedCount(this.length)
-    this.off()
+    try {
+      expander.setDirection(ledPin, true)
+      expander.setPullMode(ledPin, true)
+      expander.setDriveMode(ledPin, false)
+      expander.setLedCount(this.length)
+      this.#expander = expander
+      this.off()
+    } catch (error) {
+      // A transient I2C write failure here (observed right at cold boot, before the
+      // shared bus has settled) must not escape: this constructor runs synchronously
+      // from compose.ts while building the robot context, so an uncaught throw here
+      // aborts context creation before onContextCreated ever runs, leaving the app
+      // stuck with a bare face and no drawer buttons, idle timers, or time signal.
+      // Leave #expander unset so every other method's `if (!expander) return` guard
+      // treats this LED as unavailable instead of retrying the bad state.
+      this.#expander = undefined
+      trace(`[py32-led] init write failed: ${error}\n`)
+    }
   }
 
   #stopEffect() {

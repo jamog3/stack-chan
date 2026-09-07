@@ -90,6 +90,24 @@ function loadBatteryLevelReader(): BatteryLevelReader | undefined {
   }
 }
 
+function createImu(): IMU | undefined {
+  const IMUConstructor = globalEnv.device?.sensor?.IMU
+  if (!IMUConstructor) return undefined
+  try {
+    return new IMU(IMUConstructor as ConstructorParameters<typeof IMU>[0])
+  } catch (error) {
+    // Right after a cold power-on the I2C bus the IMU shares with the AXP2101 PMIC
+    // can still be settling, so the driver's init probe can throw here even though
+    // it would succeed moments later. Letting that escape aborts
+    // createStackchanContext before onContextCreated ever runs, which leaves the
+    // whole app stuck showing a bare face with no drawer buttons, idle timers, or
+    // hourly time signal. Degrade to no IMU instead; robot.imu != null checks
+    // downstream already treat this as a valid (IMU-less board) state.
+    trace(`[main] IMU unavailable: ${String(error)}\n`)
+    return undefined
+  }
+}
+
 function loadEnvironmentReader(): EnvironmentReader {
   return () => {
     try {
@@ -216,9 +234,7 @@ export function createStackchanContext(
     trace('[main] using device.sensor.TouchPanel fallback\n')
   }
   const touchPanel = touchPanelConstructor ? new TouchPanel(touchPanelConstructor) : undefined
-  const imu = globalEnv.device?.sensor?.IMU
-    ? new IMU(globalEnv.device.sensor.IMU as ConstructorParameters<typeof IMU>[0])
-    : undefined
+  const imu = createImu()
   const microphone = Modules.has('audio-in') ? new Microphone() : undefined
   const camera = new Camera()
   const speaker = new Speaker({ volume: ttsPrefs.volume })
