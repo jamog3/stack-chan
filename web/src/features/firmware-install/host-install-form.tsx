@@ -1,5 +1,5 @@
 import { Cpu, RotateCcw, TriangleAlert, Usb } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 
 import { useI18n } from '@/app/i18n-provider'
 import { LogConsole } from '@/components/stackchan/log-console'
@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -28,6 +29,8 @@ import { useLogBuffer } from '@/hooks/use-log-buffer'
 export function HostInstallForm() {
   const { t } = useI18n()
   const [boardId, setBoardId] = useState(FIRMWARE_BOARDS[0].id)
+  const [eraseAll, setEraseAll] = useState(false)
+  const installButton = useRef<HTMLButtonElement>(null)
   const { entries, append, clear } = useLogBuffer()
   const onLog = useCallback(
     (message: string, level: 'info' | 'warning' | 'error' = 'info') => append(message, level, 'device'),
@@ -35,7 +38,11 @@ export function HostInstallForm() {
   )
   const install = useFirmwareInstall(onLog)
   const board = FIRMWARE_BOARDS.find((candidate) => candidate.id === boardId) ?? FIRMWARE_BOARDS[0]
-  const busy = ['selecting-port', 'inspecting-device', 'confirming', 'installing'].includes(install.state.status)
+  const confirmationDevice =
+    install.state.status === 'confirming' || install.state.status === 'cancelling' ? install.state.device : undefined
+  const busy = ['selecting-port', 'inspecting-device', 'confirming', 'cancelling', 'installing'].includes(
+    install.state.status
+  )
 
   const operation = useMemo<OperationState>(() => {
     switch (install.state.status) {
@@ -47,6 +54,8 @@ export function HostInstallForm() {
         return { status: 'pending', message: t('接続したデバイスを確認しています') }
       case 'confirming':
         return { status: 'pending', message: t('書き込み内容を確認してください') }
+      case 'cancelling':
+        return { status: 'pending', message: t('USB接続を解除しています') }
       case 'installing':
         return { status: 'pending', message: t('ファームウェアを書き込んでいます'), progress: install.state.progress }
       case 'success':
@@ -89,9 +98,28 @@ export function HostInstallForm() {
             <TriangleAlert aria-hidden="true" />
             <AlertTitle>{t('書き込み前にご確認ください')}</AlertTitle>
             <AlertDescription>
-              {t('書き込みを開始すると、本体に保存した設定とインストール済みのMODはすべて消去されます。')}
+              {t(
+                '通常はフラッシュ全体を消去せず、ファームウェアを書き込みます。設定やMODは、保存領域が上書きされず、パーティション配置と新しいファームウェアに互換性がある場合に保持されます。'
+              )}
             </AlertDescription>
           </Alert>
+          <div className="grid gap-2">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="erase-all"
+                checked={eraseAll}
+                onCheckedChange={setEraseAll}
+                disabled={busy}
+                aria-describedby="erase-all-warning"
+              />
+              <Label htmlFor="erase-all">{t('フラッシュ全体を消去してから書き込む')}</Label>
+            </div>
+            <p id="erase-all-warning" className="text-sm text-destructive">
+              {t(
+                'フラッシュ全体を消去すると、本体に保存した設定とインストール済みのMODを含むすべてのデータが失われます。この操作は取り消せません。'
+              )}
+            </p>
+          </div>
           <OperationStatus
             state={operation}
             labels={{
@@ -102,7 +130,12 @@ export function HostInstallForm() {
             }}
           />
           <div className="flex flex-col gap-2 sm:flex-row">
-            <Button className="min-h-10 flex-1" onClick={() => void install.install(board)} disabled={busy}>
+            <Button
+              ref={installButton}
+              className="min-h-10 flex-1"
+              onClick={() => void install.install(board, { eraseAll })}
+              disabled={busy}
+            >
               <Usb data-icon="inline-start" />
               {install.state.status === 'idle' ? t('USBに接続して書き込む') : t('もう一度書き込む')}
             </Button>
@@ -118,28 +151,45 @@ export function HostInstallForm() {
 
       <LogConsole entries={entries} onClear={clear} title={t('書き込みログ')} />
 
-      <AlertDialog open={install.state.status === 'confirming'}>
-        <AlertDialogContent>
+      <AlertDialog
+        open={Boolean(confirmationDevice)}
+        onOpenChange={(open) => {
+          if (!open) install.cancel()
+        }}
+      >
+        <AlertDialogContent finalFocus={installButton}>
           <AlertDialogHeader>
             <AlertDialogMedia>
               <Cpu />
             </AlertDialogMedia>
             <AlertDialogTitle>{t('このデバイスへ書き込みますか？')}</AlertDialogTitle>
-            <AlertDialogDescription>{t('既存のファームウェアを選択した内容で上書きします。')}</AlertDialogDescription>
+            <AlertDialogDescription>
+              {confirmationDevice?.eraseAll
+                ? t(
+                    'フラッシュ全体を消去すると、本体に保存した設定とインストール済みのMODを含むすべてのデータが失われます。この操作は取り消せません。'
+                  )
+                : t(
+                    '通常はフラッシュ全体を消去せず、ファームウェアを書き込みます。設定やMODは、保存領域が上書きされず、パーティション配置と新しいファームウェアに互換性がある場合に保持されます。'
+                  )}
+            </AlertDialogDescription>
           </AlertDialogHeader>
-          {install.state.status === 'confirming' && (
+          {confirmationDevice && (
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg bg-muted p-3 text-sm">
               <dt className="text-muted-foreground">{t('ボード')}</dt>
-              <dd className="font-medium">{install.state.device.board.label}</dd>
+              <dd className="font-medium">{confirmationDevice.board.label}</dd>
               <dt className="text-muted-foreground">{t('検出')}</dt>
-              <dd className="font-medium">{install.state.device.chip}</dd>
+              <dd className="font-medium">{confirmationDevice.chip}</dd>
               <dt className="text-muted-foreground">{t('バージョン')}</dt>
-              <dd className="font-medium">{install.state.device.firmwareVersion}</dd>
+              <dd className="font-medium">{confirmationDevice.firmwareVersion}</dd>
             </dl>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={install.cancel}>{t('キャンセル')}</AlertDialogCancel>
-            <AlertDialogAction onClick={install.confirm}>{t('書き込む')}</AlertDialogAction>
+            <AlertDialogCancel disabled={install.state.status === 'cancelling'} onClick={install.cancel}>
+              {t('キャンセル')}
+            </AlertDialogCancel>
+            <AlertDialogAction disabled={install.state.status === 'cancelling'} onClick={install.confirm}>
+              {confirmationDevice?.eraseAll ? t('全消去して書き込む') : t('書き込む')}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

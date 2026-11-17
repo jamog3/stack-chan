@@ -53,6 +53,7 @@ Because it does not use the xsbug install channel, the installed host can be eit
 - Use capability-oriented context APIs for faces, motion, input, audio, camera, and connectivity.
 - Run Stack-chan with multiple motor configurations, including Feetech, FUTABA, DYNAMIXEL, and PWM servos.
 - Generate speech through Stack-chan Voice, VOICEVOX, ElevenLabs, or OpenAI.
+- Use the native WebRTC conversation backend in standard CoreS3 and M5StackChan CoreS3 builds; see [activation and acceptance](../docs/operations/cores3-webrtc-acceptance.md).
 - Access firmware installation, BLE preferences, the MOD Gallery, the block editor, the face editor, and the WebAssembly simulator from a browser.
 - Use the firmware and Web UI in Japanese, English, or Simplified Chinese.
 
@@ -98,4 +99,5 @@ See [Building and Writing Programs](docs/flashing-firmware.md) for target-specif
 - [MODs](mods/README.md)
 - [Localization](docs/localization.md)
 - [Mini apps (experimental, Japanese)](docs/mini-apps_ja.md)
+- [v1.1.0 release notes](../docs/release-notes/v1.1.0.md)
 - [v1.0.0 release notes](../docs/release-notes/v1.0.0.md)

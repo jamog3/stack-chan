@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   assertNoCustomBuildOutput,
@@ -10,16 +11,12 @@ import {
   hostApplicationName,
   moddableOutputArguments,
 } from './lib/build-output.mjs'
-import {
-  buildVariantMarkerPath,
-  readBuildVariant,
-  resolveBuildVariant,
-  writeBuildVariant,
-} from './lib/build-variant.mjs'
 import { aliases, devices, resolveDevice } from './lib/devices.mjs'
+import { validateFirmwareBundleTarget } from './lib/firmware-bundle.mjs'
 import { prepareCoreS3IdfDependencies } from './lib/idf-dependencies.mjs'
 import { installModArchive, resolveModArchivePath } from './lib/mod-flash.mjs'
-import { prepareCoreS3VersionSdkconfig, readModdableVersion } from './lib/moddable-version.mjs'
+import { prepareCoreS3VersionSdkconfig, prepareVersionSdkconfig, readModdableVersion } from './lib/moddable-version.mjs'
+import { manifestUsesWebRtc, prepareWebRtcSolution } from './lib/webrtc-solution.mjs'
 
 const command = process.argv[2]
 const rawArgs = process.argv.slice(3)
@@ -60,6 +57,8 @@ const device = devices[deviceName]
 const args = positionalArgs(rawArgs).filter((arg) => !isDeviceName(arg) && !isBuildModeFlag(arg))
 const platform = `esp32:${device.platform}`
 const manifest = readOption(rawArgs, 'manifest') ?? process.env.STACKCHAN_MANIFEST ?? device.manifest
+let toolManifest = manifest
+let expectedDescriptorVersion
 const dryRun = process.env.STACKCHAN_DRY_RUN === '1'
 const { mode: buildMode, args: buildModeArgs } = readBuildConfiguration(rawArgs, command)
 const outputArgs = moddableOutputArguments()
@@ -67,6 +66,20 @@ const uploadPort =
   readOption(rawArgs, 'port') ?? process.env.STACKCHAN_PORT ?? process.env.UPLOAD_PORT ?? process.env.ESPPORT
 const uploadBaud = readOption(rawArgs, 'baud') ?? process.env.STACKCHAN_BAUD ?? process.env.ESPBAUD
 let subprocessEnvironment = uploadPort ? { ...process.env, UPLOAD_PORT: uploadPort } : process.env
+let realtime = false
+let solutionDirectory
+if (!dryRun && deviceName === 'm5stackchan_cores3' && ['build', 'flash', 'deploy', 'debug'].includes(command)) {
+  try {
+    realtime = manifestUsesWebRtc(manifest, deviceName)
+    if (realtime) {
+      solutionDirectory = prepareWebRtcSolution()
+      subprocessEnvironment = { ...subprocessEnvironment, ESP_WEBRTC_SOLUTION: solutionDirectory }
+    }
+  } catch (error) {
+    console.error(`[stack-chan] WebRTC dependency setup failed: ${error.message}`)
+    process.exit(1)
+  }
+}
 
 if (
   deviceName === 'm5stackchan_cores3' &&
@@ -78,20 +91,33 @@ if (
   )
 }
 
-if (!dryRun && deviceName === 'm5stackchan_cores3' && command !== 'mod' && command !== 'mod:build') {
+if (
+  !dryRun &&
+  ['m5stackchan_cores3', 'stackchan_rt'].includes(deviceName) &&
+  command !== 'mod' &&
+  command !== 'mod:build'
+) {
   try {
     prepareCoreS3IdfDependencies({
       outputDirectory: buildOutputDirectory,
       platformName: deviceName,
       applicationName: hostApplicationName,
       mode: buildMode,
+      realtime,
+      solutionDirectory,
     })
   } catch (error) {
     console.error(`[stack-chan] IDF dependencies could not be prepared: ${error.message}`)
     process.exit(1)
   }
+}
+
+if (!dryRun && deviceName === 'm5stackchan_cores3' && command !== 'mod' && command !== 'mod:build') {
   try {
-    const versionSdkconfig = prepareCoreS3VersionSdkconfig()
+    const versionSdkconfig = prepareCoreS3VersionSdkconfig({
+      realtime,
+      realtimePerformance: path.basename(manifest) === 'manifest_openai_live.json',
+    })
     subprocessEnvironment = { ...subprocessEnvironment, SDKCONFIGPATH: versionSdkconfig.directory }
   } catch (error) {
     console.error(`[stack-chan] CoreS3 firmware version could not be prepared: ${error.message}`)
@@ -99,19 +125,36 @@ if (!dryRun && deviceName === 'm5stackchan_cores3' && command !== 'mod' && comma
   }
 }
 
-const buildVariantChanged =
-  !dryRun && ['build', 'flash', 'deploy', 'debug'].includes(command) ? prepareBuildVariant() : false
-
-if (buildVariantChanged && deviceName === 'm5stackchan_cores3') {
+if (!dryRun && device.sdkconfigTarget && ['build', 'flash', 'deploy', 'debug'].includes(command)) {
   try {
-    prepareCoreS3IdfDependencies({
-      outputDirectory: buildOutputDirectory,
+    const moddableDirectory = process.env.MODDABLE
+    if (!moddableDirectory) throw new Error('MODDABLE environment variable is required')
+    const versionSdkconfig = prepareVersionSdkconfig({
       platformName: deviceName,
-      applicationName: hostApplicationName,
-      mode: buildMode,
+      moddableDirectory,
+      sourceDirectory: path.join(moddableDirectory, 'build/devices/esp32/targets', device.sdkconfigTarget, 'sdkconfig'),
+      partitionSourcePath: path.join(
+        moddableDirectory,
+        'build/devices/esp32/targets',
+        device.sdkconfigTarget,
+        'sdkconfig/partitions.csv',
+      ),
     })
+    expectedDescriptorVersion = versionSdkconfig.version
+    // The included board manifest overrides SDKCONFIGPATH from the environment.
+    // Apply this last, as the standard release bundle wrapper does.
+    const overrideDirectory = path.join(buildOutputDirectory, 'generated', 'host-manifests', deviceName)
+    const overrideManifest = path.join(overrideDirectory, 'sdkconfig.json')
+    mkdirSync(overrideDirectory, { recursive: true })
+    writeFileSync(overrideManifest, JSON.stringify({ build: { SDKCONFIGPATH: versionSdkconfig.directory } }))
+    toolManifest = path.join(
+      path.dirname(path.resolve(manifest)),
+      `stack-chan-host.${deviceName}.${process.pid}.manifest.json`,
+    )
+    writeFileSync(toolManifest, JSON.stringify({ include: [path.resolve(manifest), overrideManifest] }))
+    process.on('exit', () => rmSync(toolManifest, { force: true }))
   } catch (error) {
-    console.error(`[stack-chan] IDF dependencies could not be prepared after target clean: ${error.message}`)
+    console.error(`[stack-chan] firmware version could not be prepared: ${error.message}`)
     process.exit(1)
   }
 }
@@ -126,12 +169,18 @@ switch (command) {
       '-t',
       'build',
       ...outputArgs,
-      path.resolve(manifest),
+      path.resolve(toolManifest),
       ...args,
     ])
+    if (expectedDescriptorVersion) {
+      validateFirmwareBundleTarget(
+        path.join(buildOutputDirectory, 'bin', 'esp32', deviceName, buildMode, hostApplicationName),
+        expectedDescriptorVersion,
+      )
+    }
     break
   case 'flash':
-    run('mcconfig', [...buildModeArgs, '-m', '-p', platform, ...outputArgs, path.resolve(manifest), ...args])
+    run('mcconfig', [...buildModeArgs, '-m', '-p', platform, ...outputArgs, path.resolve(toolManifest), ...args])
     break
   case 'deploy':
     run('mcconfig', [
@@ -142,12 +191,12 @@ switch (command) {
       '-t',
       'deploy',
       ...outputArgs,
-      path.resolve(manifest),
+      path.resolve(toolManifest),
       ...args,
     ])
     break
   case 'debug':
-    run('mcconfig', [...buildModeArgs, '-m', '-p', platform, ...outputArgs, path.resolve(manifest), ...args])
+    run('mcconfig', [...buildModeArgs, '-m', '-p', platform, ...outputArgs, path.resolve(toolManifest), ...args])
     break
   case 'mod':
   case 'mod:build': {
@@ -160,11 +209,26 @@ switch (command) {
     }
     const packageDirectory = findPackageDirectory(modInput)
     const projectDirectory = packageDirectory ?? path.dirname(path.resolve(modInput))
-    const projectName = path.basename(projectDirectory)
+    const projectName = packageDirectory
+      ? path.basename(JSON.parse(readFileSync(path.join(packageDirectory, 'package.json'), 'utf8')).name)
+      : path.basename(projectDirectory)
     if (packageDirectory) {
+      // mcpack lowercases the complete -p argument, including custom paths.
+      // A lowercase temporary alias preserves case-sensitive checkout paths.
+      let packagePlatformPath = path.resolve(device.platform)
+      if (process.platform !== 'win32' && packagePlatformPath !== packagePlatformPath.toLowerCase()) {
+        const aliasRoot = path.join('/tmp', `stackchan-mod-platform-${randomUUID()}`)
+        packagePlatformPath = path.join(aliasRoot, 'board')
+        if (!dryRun) {
+          mkdirSync(aliasRoot, { mode: 0o700 })
+          process.once('exit', () => rmSync(aliasRoot, { recursive: true, force: true }))
+          symlinkSync(path.resolve(device.platform), packagePlatformPath, 'dir')
+        }
+      }
+      const packagePlatform = `esp32:${packagePlatformPath}`
       run(
         'mcpack',
-        ['mcrun', ...buildModeArgs, '-m', '-p', platform, '-t', 'build', ...outputArgs, ...args.slice(1)],
+        ['mcrun', ...buildModeArgs, '-m', '-p', packagePlatform, '-t', 'build', ...outputArgs, ...args.slice(1)],
         packageDirectory,
       )
     } else {
@@ -227,37 +291,6 @@ function run(bin, binArgs, cwd = process.cwd()) {
     process.exit(1)
   }
   if (result.status !== 0) process.exit(result.status ?? 1)
-}
-
-/**
- * Cleans a shared Moddable target before switching its application manifest.
- * mcconfig otherwise may reuse generated resources and configuration from the
- * previous manifest because every host variant has the same application name.
- */
-function prepareBuildVariant() {
-  const markerPath = buildVariantMarkerPath({
-    outputDirectory: buildOutputDirectory,
-    deviceName,
-    mode: buildMode,
-    applicationName: hostApplicationName,
-  })
-  const selectedVariant = resolveBuildVariant(manifest)
-  if (readBuildVariant(markerPath) === selectedVariant) return false
-
-  console.log(`[stack-chan] cleaning target before manifest switch: ${manifest}`)
-  ensureBuildOutputDirectory()
-  const result = spawnSync(
-    'mcconfig',
-    [...buildModeArgs, '-m', '-p', platform, '-t', 'clean', ...outputArgs, selectedVariant],
-    { env: subprocessEnvironment, stdio: 'inherit' },
-  )
-  if (result.error) {
-    console.error(`[stack-chan] mcconfigを実行できませんでした: ${result.error.message}`)
-    process.exit(1)
-  }
-  if (result.status !== 0) process.exit(result.status ?? 1)
-  writeBuildVariant(markerPath, selectedVariant)
-  return true
 }
 
 /**

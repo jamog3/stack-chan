@@ -8,6 +8,9 @@ on:
     paths:
       - "firmware/**"
       - "web/**"
+      - "**/*.kicad_sch"
+      - "**/*.kicad_pcb"
+      - "schematics/**/*.kibot.yaml"
       - ".github/scripts/**"
       - ".github/actions/setup/action.yml"
       - ".github/workflows/bundle.yml"
@@ -15,10 +18,14 @@ on:
   pull_request:
     branches:
       - develop
+      - feat/webrtc-runtime-coexistence
       - main
     paths:
       - "firmware/**"
       - "web/**"
+      - "**/*.kicad_sch"
+      - "**/*.kicad_pcb"
+      - "schematics/**/*.kibot.yaml"
       - ".github/scripts/**"
       - ".github/actions/setup/action.yml"
       - ".github/workflows/bundle.yml"
@@ -34,7 +41,8 @@ concurrency:
 jobs:
   firmware:
     name: Release build (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    # Match the Ubuntu 24.04 / Python 3.12 ESP-IDF toolchain cache.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -64,10 +72,21 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
         with:
-          target-branch: "9.0.0"
+          target-branch: "10.1.1"
+      - name: Prepare pinned WebRTC sources
+        if: matrix.target == 'm5stack_cores3' || matrix.target == 'm5stackchan_cores3'
+        working-directory: ./firmware
+        run: npm run setup:webrtc
       - name: Build release firmware
         working-directory: ./firmware
         run: source "$HOME/.local/share/xs-dev-export.sh" && ${{ matrix.command }}
+      - name: Verify Avatar DSL ESP32 ABI for all rotations
+        if: matrix.target == 'm5stackchan_cores3'
+        working-directory: ./firmware
+        run: |
+          source "$HOME/.local/share/xs-dev-export.sh"
+          source "$IDF_PATH/export.sh"
+          npm run test:avatar-dsl:esp32:abi
       - name: Upload bundle target
         if: matrix.bundle
         uses: actions/upload-artifact@v7
@@ -78,7 +97,8 @@ jobs:
 
   web:
     name: Bundle web artifacts
-    runs-on: ubuntu-latest
+    # Match the Ubuntu 24.04 / Python 3.12 ESP-IDF toolchain cache.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -86,7 +106,7 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
         with:
-          target-branch: "9.0.0"
+          target-branch: "10.1.1"
           install-emscripten: "true"
       - name: Install web dependencies
         working-directory: ./firmware
@@ -124,6 +144,14 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      - name: Build candidate schematics
+        if: github.event_name == 'pull_request'
+        uses: INTI-CMNB/KiBot@v2_k7
+        with:
+          config: schematics/m5-pantilt/m5-pantilt.kibot.yaml
+          schema: schematics/m5-pantilt/m5-pantilt.kicad_sch
+          board: schematics/m5-pantilt/m5-pantilt.kicad_pcb
+          dir: pages-schematics
       - name: Download bundle targets
         uses: actions/download-artifact@v8
         with:
@@ -144,32 +172,16 @@ jobs:
         with:
           name: web-dist
           path: ./web/dist
-      - name: Checkout Pages baseline
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v7
-        with:
-          ref: gh-pages
-          path: pages-baseline
-          persist-credentials: false
       - name: Assemble Cloudflare Pages preview
         if: github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          test -s ./pages-baseline/web/schematics/index.html
-          mkdir -p ./pages-preview
-          cp -R ./web/dist/. ./pages-preview/
-          rm -rf \
-            ./pages-preview/schematics \
-            ./pages-preview/flash/tech.moddable.stackchan
-          mkdir -p ./pages-preview/flash/tech.moddable.stackchan
-          cp -R ./pages-baseline/web/schematics ./pages-preview/schematics
-          cp -R \
-            ./firmware/host/app/tech.moddable.stackchan/. \
-            ./pages-preview/flash/tech.moddable.stackchan/
-          mkdir -p ./pages-preview/schemas
-          cp \
-            ./docs/specs/stackchan-mod.schema.json \
-            ./pages-preview/schemas/stackchan-mod.schema.json
+        run: >-
+          node .github/scripts/update-pages-bundle.mjs
+          ./web/dist
+          ./firmware/host/app/tech.moddable.stackchan
+          ./docs/specs/stackchan-mod.schema.json
+          .
+          pages-preview
+          ./pages-schematics
       - name: Validate Cloudflare Pages preview
         if: github.event_name == 'pull_request'
         run: |
@@ -186,8 +198,13 @@ jobs:
 
   deploy:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    env:
+      PAGES_CHANNEL: ${{ github.ref == 'refs/heads/main' && 'release' || 'develop' }}
+      PAGES_DIRECTORY: ${{ github.ref == 'refs/heads/main' && 'web' || 'develop/web' }}
     concurrency:
       group: gh-pages-deploy
       cancel-in-progress: false
@@ -215,34 +232,22 @@ jobs:
           name: web-dist
           path: ./web-dist
       - name: Update bundle files
-        run: |
-          if [ -z "$(find ./firmware-bundle -mindepth 1 -print -quit)" ]; then
-            echo "Firmware bundle artifact is empty"
-            exit 1
-          fi
-          if [ -z "$(find ./web-dist -mindepth 1 -print -quit)" ]; then
-            echo "Web application artifact is empty"
-            exit 1
-          fi
-          test -s ./web-dist/simulator/mc.js
-          test -s ./web-dist/simulator/mc.wasm
-          rsync -a --delete \
-            --exclude '/schematics/' \
-            --exclude '/flash/tech.moddable.stackchan/' \
-            ./web-dist/ ./web/
-          rm -rf ./web/flash/tech.moddable.stackchan
-          mkdir -p ./web/flash/tech.moddable.stackchan
-          cp -R ./firmware-bundle/. ./web/flash/tech.moddable.stackchan/
-          mkdir -p ./web/schemas
-          cp ./website-source/docs/specs/stackchan-mod.schema.json ./web/schemas/stackchan-mod.schema.json
+        run: >-
+          node ./website-source/.github/scripts/update-pages-bundle.mjs
+          ./web-dist
+          ./firmware-bundle
+          ./website-source/docs/specs/stackchan-mod.schema.json
+          .
+          "$PAGES_DIRECTORY"
       - name: Commit bundle update
         run: |
+          set -euo pipefail
           git config user.name 'GitHub Action'
           git config user.email 'action@github.com'
-          git add --all ./web
+          git add --all "./$PAGES_DIRECTORY"
           if git diff --cached --quiet; then
             echo "No bundle changes to deploy"
             exit 0
           fi
-          git commit -m "Deploy website and firmware bundle from ${{ github.sha }}"
+          git commit -m "Deploy $PAGES_CHANNEL website and firmware bundle from ${{ github.sha }}"
           git push origin HEAD:gh-pages
