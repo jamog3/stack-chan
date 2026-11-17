@@ -961,28 +961,7 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
     wakeScreen()
     originalOnFaceTouch.call(this)
   }
-  // Skip the initial idle timer when the first hourly announcement is due within
-  // IDLE_SLEEPY_DELAY_MS of boot: starting it here would move the head once via
-  // performSleepTransition, then announceHour's own performKyoroKyoro would move
-  // it again moments later, reading as a double head-turn. announceHour's
-  // wakeScreen()/finally timers pick idle tracking back up once it runs. Only
-  // skip when announceHour will actually run (it no-ops without USB power), so
-  // idle tracking isn't left stalled until the next wake event.
-  //
-  // isVbusPresent() reads AXP2101 over I2C; a transient failure here must not
-  // throw synchronously, since that would abort onContextCreated before the
-  // button/touch handlers below are registered, leaving input dead after boot.
-  // Falling back to `false` (don't skip) keeps idle tracking on the safe side.
-  let shouldDeferInitialIdleTimer = false
-  try {
-    shouldDeferInitialIdleTimer =
-      timeSignalEnabled && isVbusPresent() !== false && msUntilNextHour() <= IDLE_SLEEPY_DELAY_MS
-  } catch (error) {
-    trace(`[Idle] vbus presence check error ${errorMessage(error)}\n`)
-  }
-  if (!shouldDeferInitialIdleTimer) {
-    scheduleIdleTimers()
-  }
+  scheduleIdleTimers()
 
   if (robot.button != null) {
     if (robot.button.a != null) {

@@ -157,16 +157,7 @@ class PY32ServoPower {
   setEnabled(enabled: boolean) {
     const expander = this.#expander
     if (!expander) return
-    try {
-      expander.digitalWrite(this.#pin, enabled)
-      trace(`[m5stackchan-servo] servo power ${enabled ? 'on' : 'off'} (${expander.getWriteValue(this.#pin)})\n`)
-    } catch (error) {
-      // A transient I2C write failure here (observed right at cold boot, likely from
-      // bus noise as the servo power rail switches) must not escape: onAttached() runs
-      // from inside StackchanRuntimeContext's constructor, so an uncaught throw here
-      // aborts context creation before onContextCreated ever runs, leaving the app
-      // stuck with a bare face and no drawer buttons, idle timers, or time signal.
-      trace(`[m5stackchan-servo] servo power ${enabled ? 'on' : 'off'} write failed: ${error}\n`)
-    }
+    expander.digitalWrite(this.#pin, enabled)
+    trace(`[m5stackchan-servo] servo power ${enabled ? 'on' : 'off'} (${expander.getWriteValue(this.#pin)})\n`)
   }
 }
