@@ -43,12 +43,12 @@ test('singing blocks are available only on stackchan-voice targets', () => {
   )
 })
 
-test('deployment compatibility checks chip family and exact XS archive version', () => {
+test('deployment compatibility checks chip family and runtime XS archive range', () => {
   assert.equal(
     inspectDeploymentCompatibility('m5stackchan-cores3', {
       chip: 'ESP32-S3',
       xsVersion: [17, 8, 0],
-      firmwareVersion: '8.3.0-1-gabcdef',
+      firmwareVersion: '9.5.0+stackchan.1',
       requireFirmware: true,
       requireArchive: true,
     }).compatible,
@@ -64,7 +64,7 @@ test('deployment compatibility checks chip family and exact XS archive version',
   )
   const wrongXs = inspectDeploymentCompatibility('m5stackchan-cores3', {
     chip: 'ESP32-S3',
-    xsVersion: [17, 7, 0],
+    xsVersion: [17, 6, 0],
   })
   assert.deepEqual(
     wrongXs.diagnostics.map((item) => item.code),
@@ -90,7 +90,7 @@ test('deployment compatibility checks chip family and exact XS archive version',
     ['VP_FIRMWARE_VERSION_MISMATCH']
   )
   const simulatorInstall = inspectDeploymentCompatibility('simulator', {
-    firmwareVersion: '8.3.0',
+    firmwareVersion: '10.0.0',
     requireFirmware: true,
   })
   assert.deepEqual(
@@ -99,7 +99,7 @@ test('deployment compatibility checks chip family and exact XS archive version',
   )
 
   const missingDeviceEvidence = inspectDeploymentCompatibility('m5stackchan-cores3', {
-    firmwareVersion: '8.3.0',
+    firmwareVersion: '9.5.0',
     requireFirmware: true,
     requireArchive: true,
   })
@@ -121,7 +121,7 @@ test('deployment compatibility gates versioned capabilities on the detected Stac
   const currentHost = inspectDeploymentCompatibility('m5stackchan-cores3', {
     chip: 'ESP32-S3',
     xsVersion: [17, 8, 0],
-    firmwareVersion: '9.0.0+stackchan.1',
+    firmwareVersion: '9.5.0+stackchan.1',
     hostApiVersion: 1,
     requirements: ['conversation.remote', 'audio.usb', 'ui.approval'],
     requireFirmware: true,
@@ -132,7 +132,7 @@ test('deployment compatibility gates versioned capabilities on the detected Stac
   const legacyHost = inspectDeploymentCompatibility('m5stackchan-cores3', {
     chip: 'ESP32-S3',
     xsVersion: [17, 8, 0],
-    firmwareVersion: '8.3.1',
+    firmwareVersion: '9.5.0',
     hostApiVersion: 0,
     requirements: ['conversation.remote', 'audio.usb', 'ui.approval'],
     requireFirmware: true,
@@ -147,11 +147,29 @@ test('deployment compatibility gates versioned capabilities on the detected Stac
   const legacyBasicMod = inspectDeploymentCompatibility('m5stackchan-cores3', {
     chip: 'ESP32-S3',
     xsVersion: [17, 8, 0],
-    firmwareVersion: '8.3.1',
+    firmwareVersion: '9.5.0',
     hostApiVersion: 0,
     requirements: ['face', 'input.headTouch'],
     requireFirmware: true,
     requireArchive: true,
   })
   assert.equal(legacyBasicMod.compatible, true)
+})
+
+
+test('SDK10.1 archive acceptance preserves host API capability requirements', () => {
+  for (const hostApiVersion of [0, 1, 2]) {
+    const result = inspectDeploymentCompatibility('m5stackchan-cores3', {
+      chip: 'ESP32-S3',
+      xsVersion: [17, 9, 2],
+      firmwareVersion: `10.1.0+stackchan.${hostApiVersion}`,
+      hostApiVersion,
+      requirements: ['audio.volume'],
+      requireFirmware: true,
+      requireArchive: true,
+    })
+    assert.equal(result.compatible, hostApiVersion >= 2)
+    assert.deepEqual(result.diagnostics.map((item) => item.code),
+      hostApiVersion >= 2 ? [] : ['VP_HOST_CAPABILITY_UNAVAILABLE'])
+  }
 })

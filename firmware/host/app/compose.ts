@@ -4,17 +4,19 @@ import { DogFace, SimpleFace, SmallFace } from 'behaviors/face'
 import Camera from 'camera'
 import type {
   ConnectivityCapability,
+  MediaCapability,
   RemoteConversationSession,
   RobotLed,
   RobotUI,
   StackchanContext,
   TTS,
-  WebRadioCapability,
 } from 'capabilities'
 import { type BatteryLevelReader, ChatStatusBar, type EnvironmentReader } from 'chat-status-bar'
+import { DOMAIN } from 'consts'
 import type { DrawerButtonViewSpec } from 'drawer'
 import { DynamixelDriver } from 'dynamixel-driver'
 import IMU from 'imu'
+import { createJitomeFace } from 'jitome-face'
 import Led from 'led'
 import { M5StackChanServoDriver } from 'm5stackchan-servo-driver'
 import config from 'mc/config'
@@ -22,8 +24,10 @@ import Microphone from 'microphone'
 import Modules from 'modules'
 import type { MotionDriver } from 'motion-controller'
 import { NoneDriver } from 'none-driver'
+import { DealWithItFace } from 'parts/image/deal-with-it-face'
 import { ImageAvatarFace } from 'parts/image/image-avatar-face'
 import type { Container as PiuContainer } from 'piu/MC'
+import Preference from 'preference'
 import PY32Led from 'py32-led'
 import { RS30XDriver } from 'rs30x-driver'
 import { StackchanRuntimeContext } from 'runtime-context'
@@ -40,6 +44,7 @@ import { TTS as RemoteTTS } from 'tts-remote'
 import { TTS as StackchanVoiceTTS } from 'tts-stackchan-voice'
 import { TTS as VoiceVoxTTS } from 'tts-voicevox'
 import { TTS as VoiceVoxWebTTS } from 'tts-voicevox-web'
+import { canonicalizeVolume } from 'volume-model'
 
 type DeviceButton = {
   read: () => number
@@ -72,9 +77,10 @@ const globalEnv = globalThis as typeof globalThis & GlobalEnvironment
 
 export type HostDeviceEnvironment = GlobalEnvironment['device']
 
-type WebRadioPlayerConstructor = new () => WebRadioCapability
+type MediaPlayerConstructor = new () => MediaCapability
 
-const DEFAULT_UI_DISPLAY_LIST_LENGTH = 4096
+// Leave room for a multiline balloon and the face in the same dirty region.
+const DEFAULT_UI_DISPLAY_LIST_LENGTH = 8192
 
 function asUIOptions(param: unknown): UIOptions {
   return (param ?? {}) as UIOptions
@@ -104,6 +110,7 @@ function loadEnvironmentReader(): EnvironmentReader {
 }
 
 function createStackchanUI(face: PiuContainer, options: UIOptions = {}): RobotUI {
+  // All startup paths share a configurable default. Capacity is exercised by Piu tests.
   return createAppControllerApplication(
     {
       face,
@@ -161,6 +168,8 @@ export function createStackchanContext(
   ])
   const uiControllers = new Map<string, (param: unknown) => RobotUI>([
     ['dog', (param) => createStackchanUI(new DogFace(), asUIOptions(param))],
+    ['jitome', (param) => createStackchanUI(createJitomeFace().content, asUIOptions(param))],
+    ['deal-with-it', (param) => createStackchanUI(new DealWithItFace(), asUIOptions(param))],
     ['simple', (param) => createStackchanUI(new SimpleFace(), asUIOptions(param))],
     [
       'image',
@@ -222,8 +231,8 @@ export function createStackchanContext(
   const microphone = Modules.has('audio-in') ? new Microphone() : undefined
   const camera = new Camera()
   const speaker = new Speaker({ volume: ttsPrefs.volume })
-  const webRadio = Modules.has('web-radio-player')
-    ? new (Modules.importNow('web-radio-player') as WebRadioPlayerConstructor)()
+  const media = Modules.has('media-player')
+    ? new (Modules.importNow('media-player') as MediaPlayerConstructor)()
     : undefined
 
   const configLed = preferences.led
@@ -279,7 +288,9 @@ export function createStackchanContext(
     remoteConversationSession: options.remoteConversationSession,
     closeHandlers: options.closeHandlers,
     speaker,
-    webRadio,
+    media,
+    volume: canonicalizeVolume(ttsPrefs.volume),
+    onVolumeChanged: (volume: number) => Preference.set(DOMAIN.tts, 'volume', String(volume)),
     microphone,
     camera,
     led,

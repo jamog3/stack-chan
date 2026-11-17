@@ -6,6 +6,7 @@ import {
   installFirmware,
   type FirmwareDeviceInfo,
   type FirmwareInstallResult,
+  type FirmwareInstallOptions,
 } from '@/services/firmware-install/firmware-install-service'
 
 export type InstallState =
@@ -13,6 +14,7 @@ export type InstallState =
   | { status: 'selecting-port' }
   | { status: 'inspecting-device' }
   | { status: 'confirming'; device: FirmwareDeviceInfo }
+  | { status: 'cancelling'; device: FirmwareDeviceInfo }
   | { status: 'installing'; progress: number }
   | { status: 'success'; result: FirmwareInstallResult }
   | { status: 'cancelled' }
@@ -37,7 +39,7 @@ export function useFirmwareInstall(onLog: (message: string, level?: 'info' | 'wa
   )
 
   const install = useCallback(
-    async (board: FirmwareBoard) => {
+    async (board: FirmwareBoard, options: FirmwareInstallOptions = {}) => {
       if (!isSecureContext) {
         setState({
           status: 'error',
@@ -58,19 +60,24 @@ export function useFirmwareInstall(onLog: (message: string, level?: 'info' | 'wa
         setState({ status: 'selecting-port' })
         onLog('接続するUSBデバイスを選択してください')
         const port = await serial.requestPort()
-        const result = await installFirmware(port, board, {
-          onLog: (message) => onLog(message),
-          onStage: (stage) => {
-            if (stage === 'inspecting') setState({ status: 'inspecting-device' })
-            else setState({ status: 'installing', progress: 0 })
+        const result = await installFirmware(
+          port,
+          board,
+          {
+            onLog: (message) => onLog(message),
+            onStage: (stage) => {
+              if (stage === 'inspecting') setState({ status: 'inspecting-device' })
+              else setState({ status: 'installing', progress: 0 })
+            },
+            onProgress: (progress) => setState({ status: 'installing', progress }),
+            onConfirm: (device) =>
+              new Promise<boolean>((resolve) => {
+                confirmation.current = resolve
+                setState({ status: 'confirming', device })
+              }),
           },
-          onProgress: (progress) => setState({ status: 'installing', progress }),
-          onConfirm: (device) =>
-            new Promise<boolean>((resolve) => {
-              confirmation.current = resolve
-              setState({ status: 'confirming', device })
-            }),
-        })
+          options
+        )
         confirmation.current = null
         if (result) {
           onLog('ファームウェア書き込みが成功しました')
@@ -95,9 +102,11 @@ export function useFirmwareInstall(onLog: (message: string, level?: 'info' | 'wa
 
   const resolveConfirmation = useCallback((approved: boolean) => {
     const resolve = confirmation.current
+    if (!resolve) return
     confirmation.current = null
     resolve?.(approved)
-    if (!approved) setState({ status: 'cancelled' })
+    if (!approved)
+      setState((current) => (current.status === 'confirming' ? { ...current, status: 'cancelling' } : current))
     else setState({ status: 'installing', progress: 0 })
   }, [])
 

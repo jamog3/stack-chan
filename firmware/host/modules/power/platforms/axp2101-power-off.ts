@@ -13,5 +13,5 @@ import { getAxp2101Power } from 'axp2101-power-capture'
 export function powerOff(): void {
   const axp2101 = getAxp2101Power()
   if (!axp2101) return
-  axp2101.writeByte(0x10, axp2101.readByte(0x10) | 0b00000001)
+  axp2101.writeUint8(0x10, axp2101.readUint8(0x10) | 0b00000001)
 }

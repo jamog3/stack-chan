@@ -28,6 +28,7 @@ StackChan can change settings such as motor types and pin assignments from the m
 
 | Key               | Description                                                                | Available values                     |
 | ----------------- | -------------------------------------------------------------------------- | ------------------------------------ |
+| sntp              | NTP server used to set the clock before TLS connections                     | Hostname or IP address; default: "pool.ntp.org" |
 | driver.type       | Type of motor driver                                                       | "m5stackchan", "scservo", "rs30x", "pwm", "none", "dynamixel"    |
 | driver.panId      | ID of the serial servo used for pan axis (horizontal rotation of the neck) | 1~254                                |
 | driver.tiltId     | ID of the serial servo used for tilt axis (vertical rotation of the neck)  | 1~254                                |
@@ -39,6 +40,28 @@ StackChan can change settings such as motor types and pin assignments from the m
 | tts.volume        | Volume when play TTS                                                       | 0~1                                  |
 
 Additionally, you can specify the paths of other manifest files in a list format under the `"include"` key.
+
+### Time synchronization on an isolated network
+
+Wi-Fi association and DHCP can succeed even when the default NTP server is unreachable.
+The host waits for time synchronization before reporting the network ready for TLS.
+If synchronization fails or times out, the boot recovery screen reports a time-sync failure and shows the configured server.
+Retry and offline startup remain available.
+
+For a VLAN without internet access, set the top-level `config.sntp` key in the app manifest used by your build to a reachable LAN NTP server:
+
+```json
+{
+  "config": {
+    "sntp": "192.0.2.123"
+  }
+}
+```
+
+Replace the example address with your server's hostname or IP address and allow NTP traffic (UDP port 123) from the robot.
+For the default `npm run build` / `npm run flash` commands, edit `host/app/manifest_m5stackchan_cores3.json`; for other targets, use the matching app manifest selected by that target's script.
+Rebuild and flash the host after changing the value; this is a build-time setting, not a Wi-Fi preference or MOD setting.
+Time synchronization is skipped if the system clock is already set.
 
 ### Configuration Example: the Stack-chan M5Bottom Kit
 
@@ -139,6 +162,8 @@ The board-specific driver type and servo bus pins live in each subplatform manif
 - Takao Core2 + SG90: [`host/platforms/takao_core2_sg90/manifest.json`](../host/platforms/takao_core2_sg90/manifest.json) — `pwm` driver, pan PWM19 / tilt PWM27.
 
 The `m5stackchan` driver adds M5StackChan-specific zero positions, motion limits, and PY32 servo-power control on top of the SCServo protocol. For safety, M5StackChan CoreS3 firmware locks the driver type to `m5stackchan`, while Stack-chan RT firmware locks it to `dynamixel`. Both ignore a different stored `driver.type`.
+
+The dedicated `m5stackchan` driver defaults to the manufacturer's recommended **5–85° pitch range**. In the StackChan rotation convention, this is `rotation.p` from −85° to −5° (provided in radians); a neutral `rotation.p = 0` request is clamped to the 5° lower limit. The calibrated zero position is unchanged. These are defaults: per-device calibration and explicit axis-limit overrides remain supported, so verify mechanical clearance before changing them. [M5Stack warns that extreme pitch angles can cause servo stall and permanent damage](https://docs.m5stack.com/en/StackChan#note).
 
 Put per-device settings such as Wi-Fi credentials and API keys in the board's app manifest under `"config"`. Keep secrets out of commits and add them locally only. On boot, the log line `[dynamixel] serial port=1 tx=7 rx=6 baud=1000000` shows the RT serial pins actually in use.
 
