@@ -100,6 +100,27 @@ test('NetworkService synchronizes time after IP when sntp is configured', async 
   }
 })
 
+test('NetworkService re-synchronizes time on every reconnect, even once the clock looks valid', async () => {
+  const sntpHost = `${'Ntp-01'.repeat(10)}.example.`
+  const { NetworkService, time } = await setup({ sntp: sntpHost })
+  const service = new NetworkService({ ssid: 'stackchan-ap', password: 'secret' })
+  const originalNow = Date.now
+  // A date far past the old "already configured" threshold (2023-01-03).
+  Date.now = () => 1700000000_000
+
+  try {
+    service.connect()
+    getFakeWiFiInstances()[0]?.emitGotIP()
+
+    assert.equal(NTP.instances.length, 1)
+    NTP.instances[0].respond()
+    assert.equal(time.ticks, NTP.nextTime / 1000)
+    service.close()
+  } finally {
+    Date.now = originalNow
+  }
+})
+
 test('NetworkService scanAndConnect connects when the target access point is found', async () => {
   const { NetworkService } = await setup()
   FakeWiFi.scanResults = [{ ssid: 'other-ap' }, { ssid: 'stackchan-ap' }]

@@ -191,10 +191,10 @@ export class NetworkService {
     this.#clearConnectionTimeout()
     this.#transition({ type: 'got-ip' })
 
-    // Setting time for TLS connection
+    // Setting time for TLS connection; re-sync on every connect to correct RTC drift
     const sntpHost = typeof config.sntp === 'string' ? config.sntp : undefined
-    if (!sntpHost || Date.now() > 1672722071_000) {
-      trace('Time·already configured, skipping\n')
+    if (!sntpHost) {
+      trace('Time·sync skipped: no sntp host configured\n')
       this.#handleConnected?.()
       return
     }
