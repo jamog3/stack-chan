@@ -15,14 +15,14 @@ export function setBacklightPercent(percent: number): void {
   if (!axp2101) return
 
   const clamped = Math.max(0, Math.min(100, Math.round(percent)))
-  const enableByte = axp2101.readByte(BACKLIGHT_ENABLE_REGISTER)
+  const enableByte = axp2101.readUint8(BACKLIGHT_ENABLE_REGISTER)
   if (clamped === 0) {
-    axp2101.writeByte(BACKLIGHT_ENABLE_REGISTER, enableByte & ~DLDO1_ENABLE_BIT)
+    axp2101.writeUint8(BACKLIGHT_ENABLE_REGISTER, enableByte & ~DLDO1_ENABLE_BIT)
     return
   }
 
-  axp2101.writeByte(BACKLIGHT_ENABLE_REGISTER, enableByte | DLDO1_ENABLE_BIT)
-  axp2101.writeByte(
+  axp2101.writeUint8(BACKLIGHT_ENABLE_REGISTER, enableByte | DLDO1_ENABLE_BIT)
+  axp2101.writeUint8(
     BACKLIGHT_LEVEL_REGISTER,
     BACKLIGHT_LEVEL_MIN_REGISTER_VALUE + Math.floor((clamped * BACKLIGHT_LEVEL_RANGE) / 100),
   )
