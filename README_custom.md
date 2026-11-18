@@ -41,6 +41,19 @@ npm run mod:m5stackchan_cores3 -- mods/your-mod/manifest.json
 
 ホストの再ビルドはしない。ホストがすでに実機に入っている前提。
 
+## Google カレンダー連携など、認証情報を入れてビルドする
+
+`host/app/manifest.json` には認証情報を書かない(コミットされる)。`host/app/manifest_local.json` に書き、ビルド時に `--manifest` で明示的に指定する。
+
+```sh
+cd firmware
+npm run flash:m5stackchan_cores3 -- --manifest host/app/manifest_local.json --port /dev/cu.usbmodem101
+```
+
+- `--manifest` を付けないと `host/app/manifest_m5stackchan_cores3.json`(認証情報なしの既定)が使われ、カレンダー機能は `[Calendar] not configured; skipping reminder scheduling` で黙って無効になる。
+- `host/app/manifest_local.json` は git 管理下にあるファイル(プレースホルダー `"config": {}` がコミットされている)。認証情報を書いたらコミットしないこと。作業前後に `git status` で確認する。
+- 中身の書式は [`docs/google-calendar-reminders_ja.md`](docs/google-calendar-reminders_ja.md) の「5. デバイスへの設定」を参照。`include` は `["./manifest_m5stackchan_cores3.json"]` にする(`./manifest.json` だとボード固有設定が抜ける)。
+
 ## ログ表示を止める
 
 ログを表示し続けているとき(`flash` のあと、`idf.py monitor` など)は **`Ctrl + ]`** で止める。
