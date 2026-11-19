@@ -2,6 +2,7 @@ import loadPreferences from 'loadPreference'
 import { DOMAIN } from 'consts'
 import type { CalendarAccount } from 'google-calendar'
 import { fetchUpcomingEvents } from 'google-calendar'
+import { numberToSpeechParts } from 'number-speech'
 import Timer from 'timer'
 import { TTS as LocalTTS } from 'tts-local'
 import { canonicalizeVolume } from 'volume-model'
@@ -98,7 +99,12 @@ export function startCalendarReminders(
       hooks.onReminderEnd?.()
     }
   }
+  // Only the very first fetch (at boot) announces the next event; the 24h-cadence
+  // refreshes below just keep the per-event reminders in REMINDERS up to date.
+  let isInitialFetch = true
   const scheduleReminders = async () => {
+    const isFirstFetch = isInitialFetch
+    isInitialFetch = false
     const { clientId, clientSecret, accounts: accountsJson } = calendarPreferences
     const accounts = parseCalendarAccounts(accountsJson)
     clearReminders()
@@ -121,6 +127,23 @@ export function startCalendarReminders(
         }
       }
       trace(`[Calendar] scheduled ${reminderTimers.length} reminder(s) from ${events.length} event(s)\n`)
+      // events is sorted by start time (see fetchUpcomingEvents), so events[0] is the next one.
+      if (isFirstFetch && events.length > 0) {
+        const nextEventStart = events[0].start
+        const minutes = nextEventStart.getMinutes()
+        // No "分" word exists among the bundled speech parts, so a non-zero minute is
+        // read as a bare digit sequence (the same num* parts used for temperature/
+        // humidity/CO2) right before calendarNextEventSuffix — e.g. 14:30 comes out as
+        // "次の予定は14時30からです", missing the "分", which reads a bit oddly but
+        // avoids recording new audio for a case that's rare in practice (most events
+        // start on the hour or half hour).
+        void announceReminder([
+          'calendarNextEventIntro',
+          `hour${nextEventStart.getHours()}`,
+          ...(minutes > 0 ? numberToSpeechParts(minutes) : []),
+          'calendarNextEventSuffix',
+        ])
+      }
     } catch (error) {
       trace(`[Calendar] fetch error ${errorMessage(error)}\n`)
     }

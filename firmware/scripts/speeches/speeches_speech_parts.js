@@ -88,4 +88,9 @@ export const speeches = {
   // times before an event starts.
   calendarReminder10Min: 'じゅっぷんごによていがあります。',
   calendarReminder1Min: 'もうすぐよていのじかんです。',
+  // Startup announcement of the next upcoming event (calendar-reminders.ts),
+  // spoken once after the initial fetch completes. hour0-hour23 above (shared
+  // with the hourly time signal) fill in the time between these two fragments.
+  calendarNextEventIntro: 'つぎのよていは',
+  calendarNextEventSuffix: 'からです。',
 }
