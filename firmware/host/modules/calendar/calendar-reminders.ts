@@ -7,7 +7,14 @@ import Timer from 'timer'
 import { TTS as LocalTTS } from 'tts-local'
 import { canonicalizeVolume } from 'volume-model'
 
-const CALENDAR_LOOKAHEAD_MS = 24 * 60 * 60 * 1000
+const ONE_DAY_MS = 24 * 60 * 60 * 1000
+// How far ahead events are fetched — wide enough that the boot announcement (see
+// isFirstFetch below) can find the next event even when it's more than a day out,
+// not just within the next 24h.
+const CALENDAR_FETCH_LOOKAHEAD_MS = 7 * ONE_DAY_MS
+// How often that fetch is repeated; kept at 24h (independent of the wider fetch
+// window above) so newly added events keep getting picked up promptly.
+const CALENDAR_REFRESH_INTERVAL_MS = ONE_DAY_MS
 
 // Each reminder fires once per event, `leadMs` before its start. `parts` are keys into the
 // bundled speech-parts resources (see scripts/speeches/speeches_speech_parts.js) — the same
@@ -62,9 +69,9 @@ export type CalendarReminderHooks = {
   onReminderEnd?: () => void
 }
 
-// On startup, fetches the next 24h of events across all configured Google accounts/calendars
-// and schedules the reminders in REMINDERS for each one; refreshes on the same 24h cadence so
-// reminders keep working past the first day.
+// On startup, fetches upcoming events (CALENDAR_FETCH_LOOKAHEAD_MS ahead) across all configured
+// Google accounts/calendars and schedules the reminders in REMINDERS for each one; refreshes
+// every CALENDAR_REFRESH_INTERVAL_MS so reminders keep working past the first day.
 export function startCalendarReminders(
   target: { setMouthOpen: (value: number) => void },
   hooks: CalendarReminderHooks = {},
@@ -117,7 +124,7 @@ export function startCalendarReminders(
       const events = await fetchUpcomingEvents(
         { clientId, clientSecret, accounts },
         now,
-        new Date(now.getTime() + CALENDAR_LOOKAHEAD_MS),
+        new Date(now.getTime() + CALENDAR_FETCH_LOOKAHEAD_MS),
       )
       for (const event of events) {
         for (const reminder of REMINDERS) {
@@ -131,14 +138,17 @@ export function startCalendarReminders(
       if (isFirstFetch && events.length > 0) {
         const nextEventStart = events[0].start
         const minutes = nextEventStart.getMinutes()
-        // No "分" word exists among the bundled speech parts, so a non-zero minute is
-        // read as a bare digit sequence (the same num* parts used for temperature/
-        // humidity/CO2) right before calendarNextEventSuffix — e.g. 14:30 comes out as
-        // "次の予定は14時30からです", missing the "分", which reads a bit oddly but
-        // avoids recording new audio for a case that's rare in practice (most events
-        // start on the hour or half hour).
+        const daysAhead = Math.floor((nextEventStart.getTime() - now.getTime()) / ONE_DAY_MS)
+        // Neither "分" nor "日後" has a recorded word among the bundled speech parts, so
+        // both are read as bare digit sequences (the same num* parts used for temperature/
+        // humidity/CO2) around the one new fixed phrase (calendarNextEventDaysSuffix) —
+        // e.g. 2 days ahead at 14:30 comes out as "次の予定は2日後の14時30からです",
+        // missing "分" and using a regularized (non-irregular) reading for "日後". Reads a
+        // bit oddly but avoids recording new audio for day/minute combinations that are
+        // rare in practice (most events are within a day, on the hour or half hour).
         void announceReminder([
           'calendarNextEventIntro',
+          ...(daysAhead > 0 ? [...numberToSpeechParts(daysAhead), 'calendarNextEventDaysSuffix'] : []),
           `hour${nextEventStart.getHours()}`,
           ...(minutes > 0 ? numberToSpeechParts(minutes) : []),
           'calendarNextEventSuffix',
@@ -154,5 +164,5 @@ export function startCalendarReminders(
   // testing. Timer.set hands the async work a fresh call stack instead (same reason the hourly
   // time signal defers its first run via Timer.set rather than calling announceHour directly).
   Timer.set(() => void scheduleReminders(), 0)
-  Timer.repeat(() => void scheduleReminders(), CALENDAR_LOOKAHEAD_MS)
+  Timer.repeat(() => void scheduleReminders(), CALENDAR_REFRESH_INTERVAL_MS)
 }

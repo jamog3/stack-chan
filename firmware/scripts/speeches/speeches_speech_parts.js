@@ -92,5 +92,10 @@ export const speeches = {
   // spoken once after the initial fetch completes. hour0-hour23 above (shared
   // with the hourly time signal) fill in the time between these two fragments.
   calendarNextEventIntro: 'つぎのよていは',
+  // Spoken after a digit (numN above) when the next event is a day or more away,
+  // e.g. num2 + calendarNextEventDaysSuffix + hour14 reads as "に" + "にちごの" +
+  // "じゅうよじ" ("2日後の14時"), a regularized (non-irregular) reading chosen to
+  // avoid recording a dedicated word per day count.
+  calendarNextEventDaysSuffix: 'にちごの',
   calendarNextEventSuffix: 'からです。',
 }
