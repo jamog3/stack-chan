@@ -86,6 +86,6 @@ export const speeches = {
   envPpmEnd: 'ピーピーエムです。',
   // Google Calendar event reminders (calendar-reminders.ts), spoken at two fixed lead
   // times before an event starts.
-  calendarReminder30Min: 'さんじゅっぷんごによていがあります。',
+  calendarReminder10Min: 'じゅっぷんごによていがあります。',
   calendarReminder1Min: 'もうすぐよていのじかんです。',
 }

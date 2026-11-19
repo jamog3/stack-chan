@@ -13,7 +13,7 @@ const CALENDAR_LOOKAHEAD_MS = 24 * 60 * 60 * 1000
 // pre-generated VOICEVOX Zundamon voice the hourly time signal uses, independent of whatever
 // config.tts is set to.
 const REMINDERS: { leadMs: number; parts: string[] }[] = [
-  { leadMs: 30 * 60 * 1000, parts: ['calendarReminder30Min'] },
+  { leadMs: 10 * 60 * 1000, parts: ['calendarReminder10Min'] },
   { leadMs: 1 * 60 * 1000, parts: ['calendarReminder1Min'] },
 ]
 
