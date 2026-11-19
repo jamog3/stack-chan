@@ -687,20 +687,30 @@ export const onContextCreated: NonNullable<StackchanAppBehavior['onContextCreate
    * count, so piling more closures directly into it risks a JS stack overflow at
    * startup on-device (observed while developing this feature).
    */
-  // wakeScreen/clearIdleTimers/performSleepTransition are referenced via wrapper closures
-  // (not passed directly) since all three are declared further down in this function; the
-  // wrappers defer the identifier lookup until a reminder actually fires, well after the
+  // wakeScreen/clearIdleTimers/performSleepTransition/enterScreenOff are referenced via wrapper
+  // closures (not passed directly) since all four are declared further down in this function;
+  // the wrappers defer the identifier lookup until a reminder actually fires, well after the
   // whole function has finished running, avoiding a temporal-dead-zone error at this call site.
   startCalendarReminders(robot, {
     onReminderStart: async () => {
       await wakeScreen()
       // wakeScreen also schedules the generic idle-sleepy/screen-off timers, but a reminder
       // can speak longer than IDLE_SLEEPY_DELAY_MS; without this, idle timeout could show the
-      // sleepy face mid-speech. onReminderEnd below drives the sleep transition explicitly
-      // instead (mirrors announceHour's identical handling for the hourly time signal).
+      // sleepy face mid-speech. onReminderEnd below drives the sleep/screen-off transitions
+      // explicitly instead (mirrors announceHour's identical handling for the hourly time
+      // signal, reusing the same shared timers/delays).
       clearIdleTimers()
     },
-    onReminderEnd: () => void performSleepTransition(robot),
+    onReminderEnd: () => {
+      timeSignalSleepTimer = Timer.set(() => {
+        timeSignalSleepTimer = undefined
+        void performSleepTransition(robot)
+      }, TIME_SIGNAL_SLEEP_DELAY_MS)
+      timeSignalScreenOffTimer = Timer.set(() => {
+        timeSignalScreenOffTimer = undefined
+        void enterScreenOff(robot)
+      }, TIME_SIGNAL_SCREEN_OFF_DELAY_MS)
+    },
   })
 
   /**

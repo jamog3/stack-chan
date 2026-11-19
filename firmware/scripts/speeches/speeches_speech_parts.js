@@ -86,6 +86,16 @@ export const speeches = {
   envPpmEnd: 'ピーピーエムです。',
   // Google Calendar event reminders (calendar-reminders.ts), spoken at two fixed lead
   // times before an event starts.
-  calendarReminder30Min: 'さんじゅっぷんごによていがあります。',
+  calendarReminder10Min: 'じゅっぷんごによていがあります。',
   calendarReminder1Min: 'もうすぐよていのじかんです。',
+  // Startup announcement of the next upcoming event (calendar-reminders.ts),
+  // spoken once after the initial fetch completes. hour0-hour23 above (shared
+  // with the hourly time signal) fill in the time between these two fragments.
+  calendarNextEventIntro: 'つぎのよていは',
+  // Spoken after a digit (numN above) when the next event is a day or more away,
+  // e.g. num2 + calendarNextEventDaysSuffix + hour14 reads as "に" + "にちごの" +
+  // "じゅうよじ" ("2日後の14時"), a regularized (non-irregular) reading chosen to
+  // avoid recording a dedicated word per day count.
+  calendarNextEventDaysSuffix: 'にちごの',
+  calendarNextEventSuffix: 'からです。',
 }
